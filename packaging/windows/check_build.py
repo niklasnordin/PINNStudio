@@ -3,7 +3,8 @@
 
 What the program must hold, used as a user would: the package's resources and reference data, a training
 run started the way Solve starts it (PINNStudio.exe script.py, a second process of the program), its results
-and environment.json, the exported script, a designed network, and the window built off screen. A library or
+and environment.json, the exported script, a designed network, the window built off screen, and the
+Python code page's Check (a dry run in a second process of the program). A library or
 data file the build missed fails here, not in use. Settings and results go to a temporary folder."""
 import ast
 import dataclasses
@@ -74,6 +75,20 @@ w.show()
 app.processEvents()
 assert w.isVisible()
 w._maybe_save_changes = lambda: True
+
+# the Python code page's Check: the Solve script's dry run, started by the window as a second process of this
+# program (PINNStudio.exe script.py), on the example written in Python (its code trusted here, so no dialog)
+from pinnstudio.core import pinnstudio_examples as PX  # noqa: E402
+from pinnstudio.core.netdesign import trust as T  # noqa: E402
+
+py_cfg = PX.build_config(PX.BY_NAME["Burgers equation (Python code)"], REFERENCE_DATA_DIR)
+T.remember([T.code_item(py_cfg.python_code)])
+w._apply_config(py_cfg)
+app.processEvents()
+assert w.python_code.check(), "Check did not start"
+res = w.python_code.wait_for_check(600_000)
+assert res.get("ok") and res.get("residuals") == [[64, 1]] and len(res.get("losses") or []) == 3, res
+print(f"Python code check: {len(res['conditions'])} conditions, initial losses {res['losses']}", flush=True)
 w.close()
 
 print(f"PINNStudio {pinnstudio.__version__}, Python {sys.version.split()[0]}, PyTorch {torch.__version__}: "
