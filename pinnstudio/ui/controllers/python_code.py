@@ -29,6 +29,7 @@ class PythonCodeController(QObject):
         self._watcher = QFileSystemWatcher(self)
         self._watcher.fileChanged.connect(self._file_changed)
         self._watched = ""
+        self._own = set()          # SHA-256 of code the user typed or wrote from the page in this session
         self._proc = None
         self._check_dir = ""
         self._timer = QTimer(self)
@@ -40,19 +41,30 @@ class PythonCodeController(QObject):
         """The problem's own settings (a problem opened, an example, Undo): the code from a file asks
         before it runs, unless exactly this code was trusted before."""
         code = code or ""
-        outside = bool(code.strip()) and not T.is_trusted(T.code_item(code))
+        self._unwatch()                       # another problem: its editor file is not this one
+        outside = bool(code.strip()) and not T.is_trusted(T.code_item(code)) and not _shipped(code)
         self.state.put_code(code, from_outside=outside)
+        if not outside:
+            self._own.add(T.sha256_text(code))
         self.state.put_modes(pde_mode or "expressions", conditions_mode or "rows")
 
     def follow(self, pde_mode: str, conditions_mode: str, code: str):
         """A settings Undo/Redo step: the code and modes as they were, keeping where the code came from
-        (the user's own code stays the user's own)."""
-        self.state.put_code(code or "")
+        (the user's own code stays the user's own; other code is trusted only by its hash)."""
+        code = code or ""
+        if code != self.state.code:
+            own = T.sha256_text(code) in self._own or T.is_trusted(T.code_item(code)) or not code.strip()
+            self.state.put_code(code, from_outside=not own)
         self.state.put_modes(pde_mode or "expressions", conditions_mode or "rows")
 
     def edit(self, code: str):
-        """The user typed in the editor."""
+        """The user typed in the editor (in code of their own, it stays their own)."""
+        self._mark_own(code)
         self.state.put_code(code)
+
+    def _mark_own(self, code):
+        if not self.state.from_outside:
+            self._own.add(T.sha256_text(code or ""))
 
     def set_pde_mode(self, mode: str) -> bool:
         if mode == "python" and not PC.has_function(self.state.code, "pde"):
@@ -91,7 +103,9 @@ class PythonCodeController(QObject):
         if ask and PC.has_function(code, name) and not self.prompter.confirm(
                 "Python code", f"Replace the code's {name}() with {what} as the page has them now?"):
             return False
-        self.state.put_code(PC.replace_function(code, name, src))
+        new = PC.replace_function(code, name, src)
+        self._mark_own(new)
+        self.state.put_code(new)
         self.state.put_message(f"{name}() written from {what}")
         return True
 
@@ -136,6 +150,14 @@ class PythonCodeController(QObject):
         safe = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in (name or "problem")) or "problem"
         path = os.path.join(folder, f"{safe}_python.py")
         try:
+            with open(path, encoding="utf-8") as fh:
+                there = fh.read()
+        except (OSError, UnicodeDecodeError):
+            there = None
+        if there is not None and there != self.state.code and not self.prompter.confirm(
+                "Python code", f"{path} exists and differs from the page's code. Replace it with the page's code?"):
+            return ""
+        try:
             self._write(path, self.state.code)
         except OSError as exc:
             self.prompter.inform("Python code", f"{path} cannot be written: {exc}")
@@ -148,10 +170,14 @@ class PythonCodeController(QObject):
         return path
 
     def _watch(self, path):
-        if self._watched:
-            self._watcher.removePath(self._watched)
+        self._unwatch()
         self._watched = path
         self._watcher.addPath(path)
+
+    def _unwatch(self):
+        if self._watched:
+            self._watcher.removePath(self._watched)
+            self._watched = ""
 
     def _file_changed(self, path):
         if path != self._watched:
@@ -180,7 +206,7 @@ class PythonCodeController(QObject):
         if T.is_trusted(item):
             self.state.put_code(code, from_outside=False)
             return True
-        if not self.state.from_outside or self.prompter.confirm_trust([item]):
+        if (not self.state.from_outside and T.sha256_text(code) in self._own) or self.prompter.confirm_trust([item]):
             T.remember([item])
             self.state.put_code(code, from_outside=False)
             return True
@@ -287,6 +313,12 @@ class PythonCodeController(QObject):
             return ""
 
 
+def _shipped(code: str) -> bool:
+    """The code of an example that comes with PINNStudio (part of the program, so not asked about)."""
+    from pinnstudio.core import pinnstudio_examples as PX
+    return any(e.settings.get("python_code") == code for e in PX.EXAMPLES)
+
+
 def _line_of(msg: str) -> int:
     import re
     m = re.search(r"line (\d+)", msg or "")
@@ -299,8 +331,8 @@ def _summary(res: dict) -> str:
     if res.get("ok"):
         r = res.get("residuals") or []
         conds = res.get("conditions") or []
-        return (f"Check passed: {len(r)} residual{'s' if len(r) != 1 else ''} "
-                f"({', '.join('×'.join(str(v) for v in s) for s in r)}), {len(conds)} condition"
-                f"{'s' if len(conds) != 1 else ''}")
+        shapes = (f"{len(r)} residual{'s' if len(r) != 1 else ''} ({', '.join('×'.join(str(v) for v in s) for s in r)})"
+                  if r else "the equations through their loss")
+        return f"Check passed: {shapes}, {len(conds)} condition{'s' if len(conds) != 1 else ''}"
     where = f" (line {res['line']})" if res.get("line") else ""
     return f"Check failed{where}: {res.get('error', '')}"

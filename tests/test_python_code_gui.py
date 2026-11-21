@@ -196,3 +196,60 @@ def test_settings_undo_keeps_the_users_own_code_trusted(win):
     w._apply_settings_snapshot(cfg)
     assert not w.python_state.from_outside
     assert w.python_code.check_trust() and a.asked == 0
+
+
+def test_loading_another_problem_stops_watching_the_old_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("PINNSTUDIO_HOME", str(tmp_path / "home"))
+    st = PythonCodeState()
+    a = Answers()
+    ctl = PythonCodeController(st, a, lambda: PINNConfig(python_code=st.code))
+    ctl.load("python", "rows", "def pde(x, y, d):\n    return [d.u]\n")
+    path = ctl.open_in_editor(str(tmp_path), "a")
+    ctl.load("python", "rows", "def pde(x, y, d):\n    return [5 * d.u]\n")      # problem B
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("def pde(x, y, d):\n    return [7 * d.u]\n")
+    ctl._file_changed(path)
+    assert "5 * d.u" in st.code                                    # B's code untouched
+
+
+def test_open_in_editor_asks_before_replacing_a_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("PINNSTUDIO_HOME", str(tmp_path / "home"))
+    st = PythonCodeState()
+    a = Answers()
+    ctl = PythonCodeController(st, a, lambda: PINNConfig(python_code=st.code))
+    ctl.edit("def pde(x, y, d):\n    return [d.u]\n")
+    mine = tmp_path / "heat_python.py"
+    mine.write_text("# my own file\n", encoding="utf-8")
+    a.yes = False
+    assert ctl.open_in_editor(str(tmp_path), "heat") == "" and mine.read_text(encoding="utf-8") == "# my own file\n"
+    a.yes = True
+    assert ctl.open_in_editor(str(tmp_path), "heat") == str(mine) and "return [d.u]" in mine.read_text(encoding="utf-8")
+
+
+def test_undo_to_untrusted_code_asks_again(tmp_path, monkeypatch):
+    monkeypatch.setenv("PINNSTUDIO_HOME", str(tmp_path / "home"))
+    st = PythonCodeState()
+    a = Answers()
+    ctl = PythonCodeController(st, a, lambda: PINNConfig(python_code=st.code, custom_bc_json="[]",
+                                                         pde_expressions="du_t - du_xx"))
+    foreign = "import os\n\ndef pde(x, y, d):\n    return [d.u]\n"
+    ctl.load("python", "rows", foreign)
+    assert st.from_outside
+    ctl.write_equations()                          # replaces pde(): Z'
+    a.trust = True
+    assert ctl.check_trust() and a.asked == 1      # Z' trusted
+    ctl.follow("python", "rows", foreign)          # settings Undo back to Z
+    assert st.from_outside
+    a.trust = False
+    assert not ctl.check_trust() and a.asked == 2
+
+
+def test_a_shipped_example_is_not_asked_about(tmp_path, monkeypatch):
+    monkeypatch.setenv("PINNSTUDIO_HOME", str(tmp_path / "home"))
+    from pinnstudio.core import pinnstudio_examples as PX
+    code = PX.BY_NAME["Burgers equation (Python code)"].settings["python_code"]
+    st = PythonCodeState()
+    a = Answers()
+    ctl = PythonCodeController(st, a, lambda: PINNConfig(python_code=st.code))
+    ctl.load("python", "python", code)
+    assert not st.from_outside and ctl.check_trust() and a.asked == 0

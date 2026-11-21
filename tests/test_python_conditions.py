@@ -4,6 +4,7 @@ written from the rows train the same problem as the rows. Each example's Solve s
 loss terms and every initial loss must agree. Also: any DeepXDE condition through c.add, the time windows,
 and what Python conditions refuse."""
 import dataclasses
+import json
 import os
 import re
 import subprocess
@@ -197,3 +198,74 @@ def test_the_burgers_example_in_python_trains(tmp_path):
     """The shipped example, written by hand in conservation form (another floating-point path, so another
     training trajectory): 2000 Adam iterations reach the accuracy of the first stage of training."""
     assert _train_l2(_example("Burgers equation (Python code)"), tmp_path, "python") < 0.05
+
+
+# ── review fixes ────────────────────────────────────────────────────────
+def test_rows_written_as_c_row_are_python():
+    rows = [{"type": "pointset", "points_mode": "file", "points_file": "p.txt", "shuffle": True, "batch_size": 0,
+             "components": "", "component": 0, "extra": None}]
+    code = PC.conditions_from_rows(PINNConfig(custom_bc_json=json.dumps(rows)))
+    got = []
+
+    class C:
+        def row(self, d, **k):
+            got.append(d)
+
+        def initial(self, *a, **k):
+            pass
+    ns = {}
+    exec(code, ns)
+    ns["conditions"](C())
+    assert got == rows
+
+
+def test_an_initial_condition_as_text_reads_as_the_rows_do(tmp_path):
+    cfg = _example("Diffusion equation")
+    base = PC.conditions_from_rows(cfg).split("    c.initial(")[0]
+    as_fn = base + '    c.initial("u", lambda x: np.sin(np.pi * x[:, 0:1]))\n'
+    as_text = base + '    c.initial("u", "sin(pi*x)")\n'
+    a = _dry(dataclasses.replace(cfg, conditions_mode="python", python_code=as_fn), tmp_path, "fn")
+    b = _dry(dataclasses.replace(cfg, conditions_mode="python", python_code=as_text), tmp_path, "text")
+    assert a["losses"] == pytest.approx(b["losses"], rel=1e-6)
+
+
+def test_unused_rows_do_not_stop_solve_with_conditions_in_python():
+    rows = json.dumps([{"type": "dirichlet", "location": "False", "value": "0", "component": 3}])
+    cfg = PINNConfig(custom_bc_json=rows, conditions_mode="python",
+                     python_code="def conditions(c):\n    c.initial('u', 0)\n")
+    assert not [e for e in cfg.validate() if e.startswith("BC ")], cfg.validate()
+    assert [e for e in dataclasses.replace(cfg, conditions_mode="rows").validate() if e.startswith("BC ")]
+    per = dataclasses.replace(cfg, periodic_inputs=True)
+    assert any("Exact periodicity takes its axes" in e for e in per.validate())
+
+
+def test_check_on_a_fractional_problem(tmp_path):
+    cfg = _example("Fractional Poisson equation 1D")
+    py = dataclasses.replace(cfg, conditions_mode="python", python_code=PC.conditions_from_rows(cfg))
+    res = _dry(py, tmp_path, "frac")
+    assert res["ok"] and res["residuals"] == [] and res["losses"]
+
+
+def test_the_export_runs_the_module_in_its_own_namespace():
+    import numpy as np
+    import torch
+    import deepxde as dde
+    code = "data = 2.0\n\ndef pde(x, y, d):\n    return [data * d.u]\n"
+    out = PC.export_code(PINNConfig(python_code=code, pde_mode="python", problem_dim="1D"), {})
+    ns = {"np": np, "torch": torch, "dde": dde}
+    exec(out, ns)
+    ns["data"] = "the script's own data object"          # the script reuses the name later
+    x = torch.rand(4, 2, requires_grad=True)
+    y = 3.0 * x[:, 0:1]
+    assert torch.allclose(ns["pde"](x, y), 2.0 * y)
+
+
+def test_lap_on_an_ode_says_why():
+    import numpy as np
+    import torch
+    import deepxde as dde
+    ns = {"np": np, "torch": torch, "dde": dde, "_PDE_AXES": {"t": 0}, "_PDE_SPACE": [], "_PDE_OUTPUTS": ["u"]}
+    exec(PC.HELPER, ns)
+    d = ns["_Deriv"](torch.rand(3, 1), torch.rand(3, 1), {})
+    with pytest.raises(ValueError, match="no space axes"):
+        d.lap("u")

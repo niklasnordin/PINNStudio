@@ -239,7 +239,8 @@ class PythonCodePage(QWidget):
             conds = res.get("conditions") or []
             losses = res.get("losses") or []
             txt = (f"✓ Check passed: {len(r)} residual{'s' if len(r) != 1 else ''}"
-                   f"{', '.join([''] + ['×'.join(str(v) for v in s) for s in r])}")
+                   f"{', '.join([''] + ['×'.join(str(v) for v in s) for s in r])}" if r else
+                   "✓ Check passed (the equations through their loss)")
             if conds:
                 txt += f"; conditions: {', '.join(conds)}"
             if losses:

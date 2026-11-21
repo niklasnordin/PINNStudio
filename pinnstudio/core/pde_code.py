@@ -308,7 +308,7 @@ def conditions_from_rows(config) -> str:
             at = ', at="initial"' if r.get("apply_at") == "initial" else ""
             lines.append(f"    c.operator({_q(val)}{where}{at}{weight()})")
         else:
-            lines.append(f"    c.row({json.dumps(r, ensure_ascii=False)}{weight()})")
+            lines.append(f"    c.row({r!r}{weight()})")
     ic_lines = []
     if not steady:
         exprs = (getattr(config, "ic_expressions", "") or "").split("|")
@@ -373,9 +373,13 @@ class _Deriv:
         return f
 
     def grad(self, name):
+        if not _PDE_SPACE:
+            raise ValueError("d.grad: this problem has no space axes (an ODE has t only); use d(name, \\"t\\")")
         return [self(name, a) for a in _PDE_SPACE]
 
     def lap(self, name):
+        if not _PDE_SPACE:
+            raise ValueError("d.lap: this problem has no space axes (an ODE has t only); use d(name, \\"t\\", \\"t\\")")
         terms = [self(name, a, a) for a in _PDE_SPACE]
         out = terms[0]
         for t_ in terms[1:]:
@@ -589,11 +593,8 @@ class _Cond:
             raise ValueError("c.initial: a steady problem has no initial condition")
         if callable(value):
             _f0 = value
-        elif isinstance(value, (int, float)):
-            _f0 = lambda x, _v=float(value): np.full((len(x), 1), _v)
-        else:
-            _src = compile(str(value), "<initial>", "eval")
-            _f0 = lambda x, _s=_src: eval(_s, {"np": np, "x": x, "__builtins__": __builtins__})
+        else:                   # a number, or a text read as the rows' values are (sin, pi, x, y, constants)
+            _f0 = self._value(value)
 
         def _ic_fn(x):
             if x.ndim == 1:
@@ -684,26 +685,36 @@ pde = _pde_python
 
 
 def export_code(config, constants: dict) -> str:
-    """The exported script's equations: the user's code as written, then `pde(x, y)` for DeepXDE."""
+    """The exported script's equations: the user's module as written (a readable string), run in a namespace of
+    its own as Solve runs it, so a name in it (data, net, ...) and the script's own names never meet; then
+    `pde(x, y)` for DeepXDE."""
     code = (getattr(config, "python_code", "") or "").rstrip() + "\n"
     n_eq = n_equations(config)
     inv = inverse_names(config)
+    if "'''" in code:
+        literal = repr(code)                       # (a triple-quoted string inside: one line, still exact)
+    elif "\\" in code:
+        literal = "r'''\n" + code + "'''"         # raw, so backslashes stay as written
+    else:
+        literal = "'''\\\n" + code + "'''"
     consts = "".join(f"{k} = {v!r}\n" for k, v in constants.items())
     inv_line = (f"    _names.update({{_n: globals()[_n] for _n in {inv!r}}})   # the trainable variables\n"
                 if inv else "")
-    return f'''# ---- The equations, in Python (PINNStudio's Equations page) ----------
+    return f'''# ---- The equations, in Python (PINNStudio's Python code page) --------
 {consts}{_literals(config)}_PDE_CONSTANTS = {{{", ".join(f"{k!r}: {k}" for k in constants)}}}
 {HELPER.strip()}
 
 
-{code}
-
-_pde_user = pde
+_PDE_SOURCE = {literal}
+_PDE_NS = {{"dde": dde, "np": np, "torch": torch, "__name__": "pinnstudio_equations", **_PDE_CONSTANTS}}
+exec(compile(_PDE_SOURCE, {FILE_NAME!r}, "exec"), _PDE_NS)   # the module, in a namespace of its own
+_pde_user = _PDE_NS["pde"]
 
 
 def pde(x, y):
     _names = dict(_PDE_CONSTANTS)
-{inv_line}    return _pde_residuals(_pde_user(x, y, _Deriv(x, y, _names)), {n_eq}, x.shape[0])'''
+{inv_line}    return _pde_residuals(_pde_user(x, y, _Deriv(x, y, _names)), {n_eq}, x.shape[0])
+'''
 
 
 DRY_RUN_MARK = "PINNSTUDIO_DRY_RUN "

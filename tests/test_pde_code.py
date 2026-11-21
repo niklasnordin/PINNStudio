@@ -165,7 +165,7 @@ def test_scripts_parse_in_python_mode(name, inverse, ta):
     assert "_pde_user = _PDE_NS[\"pde\"]" in solve and "\npde = _pde_python\n" in solve
     export = CG.generate_clean_script(cfg)
     ast.parse(export)
-    assert "def pde(x, y, d):" in export and "_pde_user = pde" in export
+    assert "def pde(x, y, d):" in export and "_pde_user = _PDE_NS[\"pde\"]" in export
     assert f"_PDE_SOURCE = {cfg.python_code!r}" in solve                   # embedded as written
 
 

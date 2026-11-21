@@ -912,6 +912,19 @@ class PINNConfig:
         return []
 
     def validate(self):
+        if self.conditions_mode == "python" and not self.__dict__.get("_rows_inert"):
+            # The conditions come from conditions(c): the rows are kept but not used, so nothing in them may
+            # stop Solve. The rows' own checks run on a copy without them.
+            import dataclasses as _dc_v
+            _n_v = max(1, int(self.num_outputs or 1))
+            inert = _dc_v.replace(self, custom_bc_json="[]", ic_active=",".join(["True"] * _n_v),
+                                  forward_ic_from_file=False, periodic_inputs=False)
+            inert.__dict__["_rows_inert"] = True
+            errors = inert.validate()
+            if self.periodic_inputs:
+                errors.append("Exact periodicity takes its axes from the Boundary Conditions rows: with the conditions "
+                              "in Python, untick it (or write the cos/sin features into the input formula).")
+            return errors
         """Sanity-check the fields that would otherwise either silently
         produce a degenerate run or crash deep inside DeepXDE/PyTorch with a
         traceback that gives no hint it was a config problem -- most

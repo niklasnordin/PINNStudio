@@ -2116,6 +2116,7 @@ class MainWindow(QMainWindow):
         False = cancel."""
         if os.environ.get("QT_QPA_PLATFORM") == "offscreen":
             return True
+        self._flush_designer()          # what was typed a moment ago (designer inspector, Python code) counts
         try:
             self._update_dirty(self._build_config())
         except Exception:
