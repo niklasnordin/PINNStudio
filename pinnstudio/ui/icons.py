@@ -57,6 +57,8 @@ _ICONS = {
     "code": '<path d="m16 18 6-6-6-6"/><path d="m8 6-6 6 6 6"/>',
     "home": '<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',
     "up": '<path d="m6 15 6-6 6 6"/>',
+    "fullscreen": '<path d="M3 8V3h5"/><path d="M16 3h5v5"/><path d="M21 16v5h-5"/><path d="M8 21H3v-5"/>',
+    "exit_fullscreen": '<path d="M8 3v5H3"/><path d="M16 3v5h5"/><path d="M21 16h-5v5"/><path d="M3 16h5v5"/>',
     "undo": '<path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/>',
     "redo": '<path d="m15 14 5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/>',
     "refresh": '<path d="M21 12a9 9 0 1 1-2.6-6.4L21 8"/><path d="M21 3v5h-5"/>',
@@ -111,6 +113,8 @@ def _color(role):
 def apply(target, name, role="text", size=18):
     """Set icon `name` on a button (or a (QTabWidget, index) tab), tinted by
     `role`, and keep it tinted when the theme changes."""
+    same = (lambda e: e[0] == target) if isinstance(target, tuple) else (lambda e: e[0] is target)
+    _registry[:] = [e for e in _registry if not same(e)]      # a button that changes icon keeps one entry
     _registry.append((target, name, role, size))
     if len(_registry) % 200 == 0:
         _prune()

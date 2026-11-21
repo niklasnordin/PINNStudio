@@ -82,6 +82,13 @@ which block and why.
 
 Every edit is one step of Undo. Moving a block changes nothing in the network.
 
+## Full screen
+
+**Full screen** at the right of the designer's toolbar (or F11 on the Network tab) shows only the designer, on
+the whole screen: the model tree, the settings, the Training Log and the menus step aside. **Exit full
+screen**, F11 or Esc brings the window back as it was. Solve, opening a problem and another network type leave
+full screen by themselves.
+
 ## The inspector
 
 Select a block to set its title and settings; a stack lists its layers, with **Add layer…**, ▲, ▼ and ✕,

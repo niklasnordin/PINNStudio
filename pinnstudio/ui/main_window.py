@@ -2163,6 +2163,7 @@ class MainWindow(QMainWindow):
         self.quick_examples_combo.blockSignals(False)
         self._current_template = None
         self._example_snapshot = None
+        self._leave_full_screen()
         radio = {"1D": self.radio_1d, "2D": self.radio_2d, "3D": self.radio_3d, "ODE": self.radio_ode}.get(dim)
         if radio is not None and not radio.isChecked():
             radio.setChecked(True)
@@ -7258,6 +7259,7 @@ class MainWindow(QMainWindow):
             self._refresh_plot_types(prefer_param=True)
         # Show it in the list: switch to its category first if needed.
         want_cat = _ex_catalog.INVERSE if (ex.category == _dx_examples.INVERSE or inverse) else _ex_catalog.FORWARD
+        self._leave_full_screen()
         if name not in self.quick_examples_combo.keys() or (
                 inverse and self.quick_examples_category_combo.currentText() != _ex_catalog.INVERSE):
             self.quick_examples_category_combo.blockSignals(True)
@@ -7323,6 +7325,7 @@ class MainWindow(QMainWindow):
             mode = _ex_settings.DEFAULT
         cfg = self._build_config()
         try:
+        self._leave_full_screen()
             new, msg = _ex_settings.settings_for(cfg, key, self.radio_inverse.isChecked(), mode)
         except Exception as e:             # never block loading an example
             self.log_box.append(f"⚠️ {mode} settings could not be applied ({e}); the example loads as it is.")
@@ -8884,6 +8887,7 @@ class MainWindow(QMainWindow):
         self._designer_io_key = None
 
     def _show_network_tab(self):
+            self._leave_full_screen()
         if hasattr(self, "_network_tab_index"):
             self.right_tabs.setTabVisible(self._network_tab_index, True)
             self.right_tabs.setCurrentIndex(self._network_tab_index)
@@ -8910,6 +8914,62 @@ class MainWindow(QMainWindow):
                config.input_transform_enabled, config.input_transform_mode, config.input_feature_formula,
                getattr(config, "periodic_inputs", False), config.x_min, config.x_max, config.y_min, config.y_max,
                config.z_min, config.z_max)
+        self._full_screen = None
+        self.designer_panel.full_screen_requested.connect(self._set_network_full_screen)
+
+    def _set_network_full_screen(self, on):
+        """The Network tab on the whole screen, with nothing else of the window (Full screen, F11), and back
+        (Esc). Everything beside the panel's ancestors is hidden and shown again, and the splitters and the
+        window state come back as they were. The panel stays where it is, so a drag, Undo and the window's
+        shortcuts carry on."""
+        from PySide6.QtWidgets import QSplitter, QSplitterHandle
+        panel = self.designer_panel
+        if on and self._full_screen is None:
+            self._show_network_tab()
+            hidden, splitters = [], []
+            w = panel
+            while w is not None and w is not self:
+                parent = w.parentWidget()
+                if parent is None:
+                    break
+                if isinstance(parent, QSplitter):
+                    splitters.append((parent, parent.saveState()))
+                for sib in parent.findChildren(QWidget, options=Qt.FindChildOption.FindDirectChildrenOnly):
+                    if sib is not w and not sib.isWindow() and sib.isVisible() \
+                            and not isinstance(sib, QSplitterHandle):
+                        hidden.append(sib)
+                w = parent
+            for bar in (self.menuBar(), self.statusBar()):
+                if bar.isVisible() and bar not in hidden:
+                    hidden.append(bar)
+            self._full_screen = {"hidden": hidden, "splitters": splitters, "state": self.windowState()}
+            for h in hidden:
+                h.hide()
+            self.showFullScreen()
+            panel.set_full_screen(True)
+            panel.canvas.setFocus()
+        elif not on and self._full_screen is not None:
+            fs, self._full_screen = self._full_screen, None
+            for h in reversed(fs["hidden"]):
+                try:
+                    h.show()
+                except RuntimeError:         # deleted meanwhile
+                    pass
+            for sp, st in fs["splitters"]:
+                sp.restoreState(st)
+            state = fs["state"] & ~Qt.WindowState.WindowFullScreen
+            if state & Qt.WindowState.WindowMaximized:
+                self.showMaximized()
+            else:
+                self.showNormal()
+            self.setWindowState(state)
+            panel.set_full_screen(False)
+            panel.canvas.refit()
+
+    def _leave_full_screen(self):
+        if getattr(self, "_full_screen", None) is not None:
+            self._set_network_full_screen(False)
+
         if key != self._designer_io_key:
             self._designer_io_key = key
             self.designer.set_problem(config)
@@ -10877,6 +10937,7 @@ class MainWindow(QMainWindow):
 
     def _apply_flat_weights(self, weights_str, n_out, is_2d):
         # Order matches _flat_loss_weights_string() / _build_weight_inputs():
+        self._leave_full_screen()
         # PDE per output, then one weight per Boundary Conditions panel row,
         # then IC per output. is_2d is accepted for call-site compatibility
         # but no longer changes which keys are read.
@@ -12554,6 +12615,7 @@ class MainWindow(QMainWindow):
             self._sweep_last_run_dir = result.get("save_dir")
             self._sweep_last_run_label = label
 
+        self._leave_full_screen()               # the run streams into the Training Log
     def _on_sweep_finished(self):
         if not getattr(self, "_stopped", False):
             self._finish_progress("Sweep finished", folder=getattr(self, '_sweep_last_run_dir', None) or "")
@@ -12636,6 +12698,7 @@ class MainWindow(QMainWindow):
         self._progress_label = label
         self._stopped = False
         # the settings checks (every 1.5 s) wait while a run trains: the run
+        self._leave_full_screen()
         # already has its settings, and the check rebuilds the whole config
         if hasattr(self, '_problems_timer'):
             self._problems_timer.stop()
@@ -12935,6 +12998,7 @@ class MainWindow(QMainWindow):
         """Save whichever figure is currently shown in `label` (loss_label
         or solution_label after a Solve) to a location the user picks --
         just copies the already-generated source file, so a saved PNG/GIF
+        self._leave_full_screen()             # the normal layout is the one saved
         is byte-identical to what's on screen."""
         src = getattr(label, '_source_path', None)
         if not src or not os.path.exists(src):

@@ -7,11 +7,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (QHBoxLayout, QLabel, QMenu, QPushButton, QSplitter, QToolButton, QVBoxLayout,
                                QWidget)
 
 from pinnstudio.core.netdesign import design as D
+from pinnstudio.ui import icons as _icons
 from pinnstudio.ui.designer.canvas import DesignCanvas
 from pinnstudio.ui.designer.inspector import BlockInspector
 from pinnstudio.ui.designer.palette import BlockPalette
@@ -24,6 +26,7 @@ if TYPE_CHECKING:
 class DesignerPanel(QWidget):
     WIDE_CHARS = 140       # narrower than this many characters (large text, a narrow window): the inspector
     #                        goes under the canvas instead of beside it, so the canvas keeps its width
+    full_screen_requested = Signal(bool)     # the window does it (main_window.py); set_full_screen shows it
 
     def showEvent(self, ev):
         super().showEvent(ev)
@@ -98,11 +101,25 @@ class DesignerPanel(QWidget):
             else:
                 menu.addAction(text).triggered.connect(lambda _c=False, f=fn: f())
         self.more_btn.setMenu(menu)
+        self.full_btn = QPushButton()
+        self.full_btn.clicked.connect(lambda: self.full_screen_requested.emit(not self.full_screen))
+        self.full_screen = False
+        self.set_full_screen(False)
         for w in (self.up_btn, self.crumb):
             bar.addWidget(w)
         bar.addStretch(1)
-        for w in (self.undo_btn, self.redo_btn, self.layout_btn, self.fit_btn, self.from_form_btn, self.more_btn):
+        for w in (self.undo_btn, self.redo_btn, self.layout_btn, self.fit_btn, self.from_form_btn, self.more_btn,
+                  self.full_btn):
             bar.addWidget(w)
+        # F11 toggles, Esc leaves: anywhere in the panel (the canvas, the inspector, the palette)
+        for keys, fn in (("F11", lambda: self.full_screen_requested.emit(not self.full_screen)),
+                         ("Esc", lambda: self.full_screen and self.full_screen_requested.emit(False))):
+            sc = QShortcut(QKeySequence(keys), self)
+            sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            sc.activated.connect(fn)
+            if keys == "Esc":
+                self._esc_shortcut = sc
+                sc.setEnabled(False)
         lay.addLayout(bar)
 
         split = QSplitter(Qt.Orientation.Horizontal)
@@ -151,6 +168,17 @@ class DesignerPanel(QWidget):
         state.message.connect(self.status.setText)
         self.refresh_library()
         self.redraw()
+
+    def set_full_screen(self, on: bool):
+        """Show whether the window is in full screen with only this panel (the window says so)."""
+        self.full_screen = bool(on)
+        self.full_btn.setText("Exit full screen" if on else "Full screen")
+        self.full_btn.setToolTip("Back to the window (Esc or F11)" if on else
+                                 "Only the designer, on the whole screen (F11); Esc comes back")
+        _icons.apply(self.full_btn, "exit_fullscreen" if on else "fullscreen", "text", size=16)
+        self.full_btn.setAccessibleName(self.full_btn.text().strip())
+        if hasattr(self, "_esc_shortcut"):
+            self._esc_shortcut.setEnabled(self.full_screen)
 
     # ── requests that need the canvas's position ──────────────────
     def _add_at(self, kind, preset, x, y):
