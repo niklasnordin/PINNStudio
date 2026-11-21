@@ -50,14 +50,29 @@ class WindowPrompter:
     def inform(self, title, text):
         QMessageBox.information(self.parent, title, text)
 
+    def confirm(self, title, text):
+        r = QMessageBox.question(self.parent, title, text,
+                                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                 QMessageBox.StandardButton.No)
+        return r == QMessageBox.StandardButton.Yes
+
+    def open_external(self, path):
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        return bool(QDesktopServices.openUrl(QUrl.fromLocalFile(path)))
+
     def confirm_trust(self, items):
         dlg = QDialog(self.parent)
         dlg.setObjectName("trustDialog")
-        dlg.setWindowTitle("Trust the network design's code and files?")
+        problem = any(it.get("context") == "problem" for it in items)
+        dlg.setWindowTitle("Trust the problem's Python code?" if problem else
+                           "Trust the network design's code and files?")
         lay = QVBoxLayout(dlg)
-        intro = QLabel("This network design runs code of its own or loads a file when the network is built. "
-                       "Code runs with your rights: trust it only if you wrote it or know where it comes from. "
-                       "The decision is kept for exactly this code and these files; a change asks again.")
+        what = ("This problem's equations or conditions are Python code, which runs when it is solved or checked. "
+                if problem else
+                "This network design runs code of its own or loads a file when the network is built. ")
+        intro = QLabel(what + "Code runs with your rights: trust it only if you wrote it or know where it comes "
+                       "from. The decision is kept for exactly this code; a change asks again.")
         intro.setWordWrap(True)
         lay.addWidget(intro)
         for it in items:

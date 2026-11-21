@@ -1307,15 +1307,18 @@ class MainWindow(QMainWindow):
          "What kind of problem this is: dimension, time dependence, forward or inverse."),
         ("equations", "Equations", "∂", "#b197fc", None, ("PDE Definition",),
          "The outputs, the equations (residual = 0) and named constants."),
+        ("python", "Python code", "λ", "#69db7c", "equations", ("Python Code",),
+         "The problem as Python: pde(x, y, d) for the equations, conditions(c) for the boundary and initial "
+         "conditions, used when the Equations or Boundary conditions page says Python code."),
         ("inverse", "Inverse problem", "?", "#ffa94d", None, ("Unknown parameters", "Measured data"),
          "The unknown parameters to learn and the measured data to fit."),
         ("geometry", "Geometry", "G", "#51cf66", None, ("Domain",),
          "The domain: a basic shape, a combination of shapes, or a sketch -- and the time interval."),
         ("points", "Collocation points", "⁙", "#38d9a9", None, ("Collocation Points",),
          "How many training points are sampled in the domain, on the boundary and at the initial time."),
-        ("ic", "Initial conditions", "t", "#ffd43b", None, ("Initial Condition",),
+        ("ic", "Initial conditions", "t", "#ffd43b", None, ("Initial conditions from", "Initial Condition"),
          "The outputs' values at the initial time."),
-        ("bcs", "Boundary conditions", "B", "#ff8787", None, ("Boundary Conditions",),
+        ("bcs", "Boundary conditions", "B", "#ff8787", None, ("Boundary conditions from", "Boundary Conditions"),
          "Conditions on the boundary. Where: picks the part of the boundary each one applies to."),
         ("network", "Neural network", "N", "#63e6be", None, ("Neural Network",),
          "Network size and type, activation, and input/output transforms."),
@@ -1750,6 +1753,7 @@ class MainWindow(QMainWindow):
 
     # (keywords in a validation message -> the node that fixes it; first match wins)
     _PROBLEM_KEYWORDS = (
+        ("python", ("python code", "conditions in python")),
         ("sweep", "sweep"),
         ("inverse", ("inverse", "observ", "unknown variable", "true value")),
         ("ic", ("exact initial",)),
@@ -1829,6 +1833,8 @@ class MainWindow(QMainWindow):
         when it is sketched), Results the plots. Boundary conditions
         switches the domain to picking edges, and a BC node lets you click
         that BC's edges (faces in 3D) in and out."""
+        if key == "python" and hasattr(self, "python_page"):
+            self.python_page.refresh_names()
         sketched = self.geometry_type_combo.currentText() == "Sketch"
         gp = self._gpanel()
         other = self.domain_view if gp is self.sketch_panel else self.sketch_panel
@@ -2157,13 +2163,13 @@ class MainWindow(QMainWindow):
         save folder, GPU and plot preferences), in `dim` (1D/2D/3D/ODE)."""
         if not self._maybe_save_changes():
             return
+        self._leave_full_screen()
         self._apply_fresh_settings()
         self.quick_examples_combo.blockSignals(True)
         self.quick_examples_combo.setCurrentText("None")
         self.quick_examples_combo.blockSignals(False)
         self._current_template = None
         self._example_snapshot = None
-        self._leave_full_screen()
         radio = {"1D": self.radio_1d, "2D": self.radio_2d, "3D": self.radio_3d, "ODE": self.radio_ode}.get(dim)
         if radio is not None and not radio.isChecked():
             radio.setChecked(True)
@@ -2207,6 +2213,7 @@ class MainWindow(QMainWindow):
         "bcs": "guide/boundary-conditions/", "network": "guide/network/",
         "training": "guide/training/", "weights": "guide/loss-weights/", "adaptive": "guide/adaptive/",
         "sweep": "guide/sweeps/", "results": "guide/results/", "restore": "guide/restore/",
+        "python": "guide/python-code/",
     }
 
     def _tree_menu(self, key):
@@ -2230,6 +2237,10 @@ class MainWindow(QMainWindow):
             items.append(("Add parameter", lambda: self._add_inverse_var_row(), "add"))
         elif key == "equations":
             items.append(("Add constant", lambda: self._add_constant_row(), "add"))
+        elif key == "python":
+            items += [("Write the equations from the Equations page", lambda: self.python_code.write_equations(), None),
+                      ("Write the conditions from the rows", lambda: self.python_code.write_conditions(), None),
+                      ("Check", lambda: self.python_page.check_btn.click(), None)]
         elif key in ("results", "restore"):
             items.append(("Open a saved problem…", lambda: self._open_problem(), "open"))
         if key == "problem":
@@ -2666,6 +2677,7 @@ class MainWindow(QMainWindow):
         self.frac_widget.setVisible(False)
         self._build_pde_inputs(1)
         left_layout.addWidget(self.pde_group)
+        self._build_python_code(left_layout)
 
     def _refresh_equation_previews(self):
         for w in getattr(self, "pde_inputs", []):
@@ -3952,6 +3964,12 @@ class MainWindow(QMainWindow):
         self.weights_group = QGroupBox("Loss Weights")
         _wg_outer = QVBoxLayout(self.weights_group)
         _wg_outer.setSpacing(4)
+        self.weights_cond_note = QLabel("The conditions are in the Python code: their weights are the weight= "
+                                        "of each call there. The equations' weights are set here.")
+        self.weights_cond_note.setWordWrap(True)
+        self.weights_cond_note.setObjectName("pageDesc")
+        self.weights_cond_note.setVisible(False)
+        _wg_outer.addWidget(self.weights_cond_note)
         # Weights from the initial losses (wᵢ = c / Lᵢ(0)).
         _wi_row = QHBoxLayout()
         self.loss_w_init_cb = QCheckBox("Scale by initial losses:  wᵢ = c / Lᵢ(0),  c =")
@@ -6517,8 +6535,8 @@ class MainWindow(QMainWindow):
         """Show the fractional settings while an equation uses frac(...)."""
         if hasattr(self, "frac_widget"):
             import re as _re_fw
-            self.frac_widget.setVisible(any(_re_fw.search(r"(?<![\w.])frac\(", w.text())
-                                            for w in getattr(self, "pde_inputs", [])))
+            self.frac_widget.setVisible(not self._python_equations() and any(
+                _re_fw.search(r"(?<![\w.])frac\(", w.text()) for w in getattr(self, "pde_inputs", [])))
 
     def _is_ode(self):
         return hasattr(self, "radio_ode") and self.radio_ode.isChecked()
@@ -6599,6 +6617,8 @@ class MainWindow(QMainWindow):
         """
         self.t_row_widget.setVisible(not checked)
         self.bc_group.setVisible(not checked)
+        if hasattr(self, "ic_from_group"):
+            self.ic_from_group.setVisible(not checked)
         self.ic_pretrain_cb.setVisible(not checked)
         self.ic_pretrain_widget.setVisible(not checked and self.ic_pretrain_cb.isChecked())
         if hasattr(self, 'adapt_combo'):
@@ -7239,6 +7259,7 @@ class MainWindow(QMainWindow):
         deepxde_examples.py (DeepXDE's own script), applied through
         _apply_config() exactly like opening a saved problem. `inverse`
         loads the example's Inverse-mode version (Example.inverse)."""
+        self._leave_full_screen()
         ex = _dx_examples.BY_NAME.get(name) or _ps_examples.BY_NAME[name]
         own = name in _ps_examples.BY_NAME      # a PINNStudio template defined by its settings
         try:
@@ -7259,7 +7280,6 @@ class MainWindow(QMainWindow):
             self._refresh_plot_types(prefer_param=True)
         # Show it in the list: switch to its category first if needed.
         want_cat = _ex_catalog.INVERSE if (ex.category == _dx_examples.INVERSE or inverse) else _ex_catalog.FORWARD
-        self._leave_full_screen()
         if name not in self.quick_examples_combo.keys() or (
                 inverse and self.quick_examples_category_combo.currentText() != _ex_catalog.INVERSE):
             self.quick_examples_category_combo.blockSignals(True)
@@ -7305,6 +7325,7 @@ class MainWindow(QMainWindow):
 
     def _apply_example_settings_mode(self, key):
         """Settings: Default / Tuned (example_settings.py) on the example just loaded."""
+        self._leave_full_screen()
         from pinnstudio.core import example_settings as _ex_settings
         combo = getattr(self, "quick_examples_settings_combo", None)
         if combo is None:
@@ -7325,7 +7346,6 @@ class MainWindow(QMainWindow):
             mode = _ex_settings.DEFAULT
         cfg = self._build_config()
         try:
-        self._leave_full_screen()
             new, msg = _ex_settings.settings_for(cfg, key, self.radio_inverse.isChecked(), mode)
         except Exception as e:             # never block loading an example
             self.log_box.append(f"⚠️ {mode} settings could not be applied ({e}); the example loads as it is.")
@@ -8368,6 +8388,7 @@ class MainWindow(QMainWindow):
             self._drop_row_widget(self.pde_main_layout, w)
         self.pde_inputs.clear()
         self.output_name_inputs.clear()
+        self._pde_expr_boxes = []
 
         is_2d = self.radio_2d.isChecked() if hasattr(self, 'radio_2d') else False
         is_3d = self.radio_3d.isChecked() if hasattr(self, 'radio_3d') else False
@@ -8390,7 +8411,13 @@ class MainWindow(QMainWindow):
                 self.pde_main_layout.addWidget(nw)
 
             if i < n_eq:
-                self.pde_main_layout.addWidget(QLabel(f"PDE {i+1} (residual = 0):"))
+                _eqw = QWidget()
+                _eql = QVBoxLayout(_eqw)
+                _eql.setContentsMargins(0, 0, 0, 0)
+                _eql.setSpacing(4)
+                self.pde_main_layout.addWidget(_eqw)
+                self._pde_expr_boxes.append(_eqw)
+                _eql.addWidget(QLabel(f"PDE {i+1} (residual = 0):"))
                 pde_inp = QLineEdit()
                 if hasattr(self, 'radio_ode') and self.radio_ode.isChecked():
                     pde_inp.setText("du_t + 0.4 * u" if i == 0 else "dv_t + 0.1 * v")
@@ -8405,12 +8432,13 @@ class MainWindow(QMainWindow):
                 pde_inp.setFixedHeight(28)
                 pde_inp.textChanged.connect(lambda _t: self._sync_frac_widget())
                 self.pde_inputs.append(pde_inp)
-                self.pde_main_layout.addWidget(pde_inp)
+                _eql.addWidget(pde_inp)
                 # the equation typeset under the box, and names it doesn't know
                 from pinnstudio.ui.equation import EquationPreview
                 prev = EquationPreview(pde_inp, self._equation_known_names)
                 pde_inp._preview = prev
-                self.pde_main_layout.addWidget(prev)
+                _eql.addWidget(prev)
+                _eqw.setVisible(not self._python_equations())
 
         names_ex = ", ".join([["u","v","w","p"][i] if i < 4 else f"u{i+1}" for i in range(n)])
         if is_3d:
@@ -8859,6 +8887,7 @@ class MainWindow(QMainWindow):
         designed = kind == "Designed"
         if not designed:
             self._form_network_type = kind       # what Edit as blocks starts from
+            self._leave_full_screen()
         for row in ("layers_row", "neurons_row", "layer_widths_row"):
             if hasattr(self, row):
                 getattr(self, row).setVisible(not designed)
@@ -8885,35 +8914,6 @@ class MainWindow(QMainWindow):
         self.designer_panel = DesignerPanel(self.design_state, self.designer, PRESETS)
         self.design_state.design_changed.connect(self._update_designer_summary)
         self._designer_io_key = None
-
-    def _show_network_tab(self):
-            self._leave_full_screen()
-        if hasattr(self, "_network_tab_index"):
-            self.right_tabs.setTabVisible(self._network_tab_index, True)
-            self.right_tabs.setCurrentIndex(self._network_tab_index)
-
-    def _design_from_form(self):
-        """Edit as blocks: the design the form's last architecture (FNN, PFNN, MsFFN, STMsFFN) describes."""
-        import dataclasses
-        try:
-            cfg = self._build_config()
-        except Exception:
-            return
-        form = dataclasses.replace(cfg, network_type=getattr(self, "_form_network_type", "FNN"))
-        self.designer.set_problem(form)
-        self._designer_io_key = None
-        self.designer.from_settings(form)
-        self._show_network_tab()
-
-    def _sync_designer_problem(self, config):
-        """The designer works out widths for the problem's current inputs and outputs: tell it when they
-        may have changed (dimension, steady, outputs, input transforms)."""
-        if not hasattr(self, "designer"):
-            return
-        key = (config.problem_dim, config.steady_state, config.num_outputs, config.output_names,
-               config.input_transform_enabled, config.input_transform_mode, config.input_feature_formula,
-               getattr(config, "periodic_inputs", False), config.x_min, config.x_max, config.y_min, config.y_max,
-               config.z_min, config.z_max)
         self._full_screen = None
         self.designer_panel.full_screen_requested.connect(self._set_network_full_screen)
 
@@ -8970,6 +8970,147 @@ class MainWindow(QMainWindow):
         if getattr(self, "_full_screen", None) is not None:
             self._set_network_full_screen(False)
 
+    # ── the problem in Python (the Python code page) ───────────────
+    def _build_python_code(self, left_layout):
+        """The Python code page (state, controller, view: rule R8), and the choices on the Equations,
+        Boundary conditions and Initial conditions pages that say what the code is used for."""
+        from pinnstudio.ui.controllers.python_code import PythonCodeController
+        from pinnstudio.ui.designer.window_prompter import WindowPrompter
+        from pinnstudio.ui.python_code import PythonCodePage
+        from pinnstudio.ui.state.python_code_state import PythonCodeState
+        self.python_state = PythonCodeState(self)
+        self.python_code = PythonCodeController(self.python_state, WindowPrompter(self), self._build_config, self)
+        group = QGroupBox("Python Code")
+        gl = QVBoxLayout(group)
+        self.python_page = PythonCodePage(self.python_state, self.python_code)
+        self.python_page.set_file_hints(
+            lambda: os.path.dirname(getattr(self, "_current_path", "") or "") or "",
+            lambda: os.path.splitext(os.path.basename(getattr(self, "_current_path", "") or "problem"))[0]
+            .replace(".pinn", "") or "problem")
+        gl.addWidget(self.python_page)
+        left_layout.addWidget(group)
+
+        def mode_row(label, choices, tip):
+            row = QHBoxLayout()
+            row.addWidget(QLabel(label))
+            combo = QComboBox()
+            for text, data in choices:
+                combo.addItem(text, data)
+            combo.setToolTip(tip)
+            row.addWidget(combo)
+            link = QPushButton("Open the Python code")
+            link.clicked.connect(lambda: self.workspace.select("python") if hasattr(self, "workspace") else None)
+            row.addWidget(link)
+            row.addStretch(1)
+            return row, combo, link
+
+        row, self.eq_mode_combo, self.eq_code_link = mode_row(
+            "Equations as:", (("Expressions", "expressions"), ("Python code", "python")),
+            "Expressions: one line per equation below. Python code: pde(x, y, d) on the Python code page "
+            "(the expressions are kept).")
+        self.pde_group.layout().insertLayout(0, row)
+        self.eq_mode_combo.activated.connect(lambda _i: self._choose_pde_mode(self.eq_mode_combo.currentData()))
+
+        self.bc_mode_combos = []
+        self._cond_notes = []
+        self.ic_from_group = None
+        for title, attr in (("Boundary conditions from", "bc_from_group"), ("Initial conditions from", "ic_from_group")):
+            g = QGroupBox(title)
+            gl2 = QVBoxLayout(g)
+            row, combo, _link = mode_row(
+                "Conditions as:", (("Rows", "rows"), ("Python code", "python")),
+                "Rows: the Boundary Conditions and Initial Condition panels. Python code: conditions(c) on the "
+                "Python code page, for both (the rows are kept).")
+            gl2.addLayout(row)
+            note = QLabel("The boundary and initial conditions come from conditions(c) on the Python code page, "
+                          "with their loss weights; the rows below are kept but not used, and the Sketch and "
+                          "Geometry views still show the rows.")
+            note.setWordWrap(True)
+            note.setObjectName("pageDesc")
+            gl2.addWidget(note)
+            self._cond_notes.append(note)
+            combo.activated.connect(lambda _i, c=combo: self._choose_conditions_mode(c.currentData()))
+            self.bc_mode_combos.append(combo)
+            setattr(self, attr, g)
+            left_layout.addWidget(g)
+        self.python_state.modes_changed.connect(self._show_python_modes)
+        self._show_python_modes()
+
+    def _python_equations(self):
+        return hasattr(self, "python_state") and self.python_state.pde_mode == "python"
+
+    def _choose_pde_mode(self, mode):
+        self.python_page.flush()
+        if not self.python_code.set_pde_mode(mode):
+            self._show_python_modes()
+        elif mode == "python":
+            self.python_page.refresh_names()
+
+    def _choose_conditions_mode(self, mode):
+        self.python_page.flush()
+        if not self.python_code.set_conditions_mode(mode):
+            self._show_python_modes()
+        elif mode == "python":
+            self.python_page.refresh_names()
+
+    def _show_python_modes(self):
+        """The pages follow the modes: the expressions and the rows are hidden or disabled while the code
+        is used instead."""
+        if not hasattr(self, "python_state"):
+            return
+        st = self.python_state
+        py_eq, py_cond = st.pde_mode == "python", st.conditions_mode == "python"
+        i = self.eq_mode_combo.findData(st.pde_mode)
+        if i >= 0 and self.eq_mode_combo.currentIndex() != i:
+            self.eq_mode_combo.setCurrentIndex(i)
+        self.eq_code_link.setVisible(py_eq)
+        for box in getattr(self, "_pde_expr_boxes", []):
+            box.setVisible(not py_eq)
+        for w in ("pde_hint_toggle",):
+            if hasattr(self, w):
+                getattr(self, w).setVisible(not py_eq)
+        if py_eq and hasattr(self, "pde_hint"):
+            self.pde_hint.setVisible(False)
+        self._sync_frac_widget()
+        for combo in self.bc_mode_combos:
+            j = combo.findData(st.conditions_mode)
+            if j >= 0 and combo.currentIndex() != j:
+                combo.setCurrentIndex(j)
+        for note in self._cond_notes:
+            note.setVisible(py_cond)
+        for g in (getattr(self, "custom_bc_group", None), getattr(self, "bc_group", None)):
+            if g is not None:
+                g.setEnabled(not py_cond)
+        if hasattr(self, "weights_cond_note"):
+            self.weights_cond_note.setVisible(py_cond)
+
+    def _show_network_tab(self):
+        if hasattr(self, "_network_tab_index"):
+            self.right_tabs.setTabVisible(self._network_tab_index, True)
+            self.right_tabs.setCurrentIndex(self._network_tab_index)
+
+    def _design_from_form(self):
+        """Edit as blocks: the design the form's last architecture (FNN, PFNN, MsFFN, STMsFFN) describes."""
+        import dataclasses
+        try:
+            cfg = self._build_config()
+        except Exception:
+            return
+        form = dataclasses.replace(cfg, network_type=getattr(self, "_form_network_type", "FNN"))
+        self.designer.set_problem(form)
+        self._designer_io_key = None
+        self.designer.from_settings(form)
+        self._show_network_tab()
+
+    def _sync_designer_problem(self, config):
+        """The designer works out widths for the problem's current inputs and outputs: tell it when they
+        may have changed (dimension, steady, outputs, input transforms)."""
+        if not hasattr(self, "designer"):
+            return
+        key = (config.problem_dim, config.steady_state, config.num_outputs, config.output_names,
+               config.input_transform_enabled, config.input_transform_mode, config.input_feature_formula,
+               getattr(config, "periodic_inputs", False), config.x_min, config.x_max, config.y_min, config.y_max,
+               config.z_min, config.z_max)
         if key != self._designer_io_key:
             self._designer_io_key = key
             self.designer.set_problem(config)
@@ -10340,6 +10481,9 @@ class MainWindow(QMainWindow):
             output_names=",".join([self.output_name_inputs[i].text() for i in range(n_out)]),
             pde_expressions="|".join([self.pde_inputs[i].text() for i in range(self._n_equations())]),
             num_equations=(self._n_equations() if self._n_equations() != n_out else 0),
+            pde_mode=self.python_state.pde_mode if hasattr(self, "python_state") else "expressions",
+            conditions_mode=self.python_state.conditions_mode if hasattr(self, "python_state") else "rows",
+            python_code=self.python_state.code if hasattr(self, "python_state") else "",
 
             bc_left_types=",".join([_safe_text(self.bc_left_types, i) for i in range(n_out)]),
             bc_right_types=",".join([_safe_text(self.bc_right_types, i) for i in range(n_out)]),
@@ -10793,6 +10937,7 @@ class MainWindow(QMainWindow):
             self._inv_rows_template = key
 
     def _open_problem(self, path=None):
+        self._leave_full_screen()
         import json
         import dataclasses
         if isinstance(path, str) and path and not os.path.isfile(path):
@@ -10937,7 +11082,6 @@ class MainWindow(QMainWindow):
 
     def _apply_flat_weights(self, weights_str, n_out, is_2d):
         # Order matches _flat_loss_weights_string() / _build_weight_inputs():
-        self._leave_full_screen()
         # PDE per output, then one weight per Boundary Conditions panel row,
         # then IC per output. is_2d is accepted for call-site compatibility
         # but no longer changes which keys are read.
@@ -11654,6 +11798,14 @@ class MainWindow(QMainWindow):
             self._inv_stash[_t] = (config.inverse_variables_json, config.inverse_obs_files_json)
         self._sync_inverse_pde_substitution(self.radio_inverse.isChecked())
         self._apply_sweep_config(config)
+        if hasattr(self, "python_code"):
+            _py = (getattr(config, "pde_mode", "expressions"), getattr(config, "conditions_mode", "rows"),
+                   getattr(config, "python_code", ""))
+            if getattr(self, "_settings_step", False):
+                self.python_code.follow(*_py)          # Undo/Redo: the code keeps where it came from
+            else:
+                self.python_code.load(*_py)
+            self._show_python_modes()
 
     def _on_num_outputs_changed(self, n):
         # Interface 2D BC requires Output Size = 2; keep the Boundary
@@ -12458,8 +12610,12 @@ class MainWindow(QMainWindow):
         panel = getattr(self, "designer_panel", None)
         if panel is not None:
             panel.inspector.flush()
+        page = getattr(self, "python_page", None)
+        if page is not None:
+            page.flush()
 
     def _on_solve(self):
+        self._leave_full_screen()               # the run streams into the Training Log
         self._flush_designer()
         if hasattr(self, 'right_tabs'):
             self.right_tabs.setCurrentWidget(self.results_tabs)   # the run streams into the log
@@ -12503,6 +12659,9 @@ class MainWindow(QMainWindow):
             self.log_box.append("ℹ The designed network's code or files are not trusted: nothing was run "
                                 "(Network tab › More › Trust…).")
             return
+        if hasattr(self, "python_code") and not self.python_code.check_trust():
+            self.log_box.append("ℹ The problem's Python code is not trusted: nothing was run (Python code page).")
+            return
         if config.sweep_enabled:
             self._start_sweep(config)
             return
@@ -12539,6 +12698,7 @@ class MainWindow(QMainWindow):
         already writes a sweep_manifest.json/sweep_summary.csv there
         once everything finishes, exactly as before -- only where that
         progress is shown changed, not what gets saved to disk."""
+        self._leave_full_screen()
         self.solve_btn.setEnabled(False)
         self.solve_btn.setText(" Running sweep…")
         self.stop_btn.setEnabled(True)
@@ -12615,7 +12775,6 @@ class MainWindow(QMainWindow):
             self._sweep_last_run_dir = result.get("save_dir")
             self._sweep_last_run_label = label
 
-        self._leave_full_screen()               # the run streams into the Training Log
     def _on_sweep_finished(self):
         if not getattr(self, "_stopped", False):
             self._finish_progress("Sweep finished", folder=getattr(self, '_sweep_last_run_dir', None) or "")
@@ -12698,7 +12857,6 @@ class MainWindow(QMainWindow):
         self._progress_label = label
         self._stopped = False
         # the settings checks (every 1.5 s) wait while a run trains: the run
-        self._leave_full_screen()
         # already has its settings, and the check rebuilds the whole config
         if hasattr(self, '_problems_timer'):
             self._problems_timer.stop()
@@ -12840,6 +12998,7 @@ class MainWindow(QMainWindow):
         Python/PyTorch process, and any GPU memory it holds, kept running
         detached from the GUI indefinitely. If a run is active, ask before
         quitting rather than silently killing it."""
+        self._leave_full_screen()             # the normal layout is the one saved
         self._save_layout()
         # isinstance(..., QThread) rather than a plain hasattr check: every
         # QObject (QMainWindow included) already has its own built-in
@@ -12998,7 +13157,6 @@ class MainWindow(QMainWindow):
         """Save whichever figure is currently shown in `label` (loss_label
         or solution_label after a Solve) to a location the user picks --
         just copies the already-generated source file, so a saved PNG/GIF
-        self._leave_full_screen()             # the normal layout is the one saved
         is byte-identical to what's on screen."""
         src = getattr(label, '_source_path', None)
         if not src or not os.path.exists(src):

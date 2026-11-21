@@ -84,7 +84,8 @@ def _parser():
     r.add_argument("problem", help="a .pinn.json problem file")
     r.add_argument("--save-dir", help="where the run folder goes (default: the problem's Save to folder)")
     r.add_argument("--trust-code", action="store_true",
-                   help="run a designed network's own code and saved files without asking (this run only)")
+                   help="run a designed network's own code and saved files, and the problem's Python code, "
+                        "without asking (this run only)")
     c = sub.add_parser("check", help="list the settings that would stop Solve")
     c.add_argument("problem", help="a .pinn.json problem file")
     return p
@@ -163,6 +164,15 @@ def cmd_run(args):
             for it in items:
                 print(f"• {it['name']} ({it['kind']}, SHA-256 {it['sha256'][:16]}…) {it['problem']}", file=sys.stderr)
             print("Trust them in the window, or pass --trust-code for this run.", file=sys.stderr)
+            return 1
+    if (config.pde_mode == "python" or config.conditions_mode == "python") and (config.python_code or "").strip():
+        from pinnstudio.core.netdesign import trust as T
+        item = T.code_item(config.python_code)
+        if not T.is_trusted(item) and not args.trust_code:
+            print("The problem's equations or conditions are Python code that is not trusted "
+                  f"(SHA-256 {item['sha256'][:16]}…).", file=sys.stderr)
+            print("Trust it in the window (Python code page, Check or Solve), or pass --trust-code for this run.",
+                  file=sys.stderr)
             return 1
     from pinnstudio.core.runner import run_pinn
     print(f"Run folder: {config.save_dir}", flush=True)

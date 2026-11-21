@@ -2923,6 +2923,8 @@ if {config.time_adaptive}:
     _ta_ic_outs = [_o for _o in range({config.num_outputs})
                    if ({config.forward_ic_from_file} and _o == 0)
                    or (_o < len(_ic_active_list) and _ic_active_list[_o].strip() == "True")]
+    if _PY_CONDITIONS:      # the outputs of the code's initial conditions, in order (one per term)
+        _ta_ic_outs = [_it[4] if _it[4] is not None else 0 for _it in _py_cond.items if _it[0] == "ic"]
     for step_i, (t0, t1) in enumerate(_ta_flat_intervals):
         print(f"\\n--- Time step {{step_i+1}}/{{n_steps}}: t = {{t0:.4f}} to {{t1:.4f}} ---")
 
@@ -2939,7 +2941,26 @@ if {config.time_adaptive}:
         # _custom_bc_entries above) is now the source of truth here too --
         # same as the main (non-time-adaptive) path. The legacy per-side
         # scheme below only runs for configs saved before the panel existed.
-        if _custom_bc_entries or _bc_panel_data_present:
+        if _PY_CONDITIONS:
+            # the conditions in Python, on this window's domain: its boundary conditions, and the code's
+            # initial conditions in the first window (every window of a growing range); later windows hold
+            # each output to the previous window's solution, as with the rows
+            _cond_i = _run_conditions(geomtime_i)
+            _constraints_i.extend(_cond_i.objects("bc"))
+            _n_bc_i = len(_constraints_i)
+            if step_i == 0 or _ta_growing:
+                _constraints_i.extend(_cond_i.objects("ic"))
+            else:
+                for _oi_ta in range({config.num_outputs}):
+                    if _is_2d or _is_3d:
+                        _xt_ic_2d = np.column_stack([x_grid, np.full(len(x_grid), t0)])
+                        _xyt_ic_anchor = _xt_ic_2d
+                        _constraints_i.append(dde.icbc.PointSetBC(_xt_ic_2d, prev_u[:, _oi_ta:_oi_ta+1], component=_oi_ta))
+                    else:
+                        xt_ic = np.column_stack([x_grid, np.full_like(x_grid.ravel(), t0)])
+                        _xyt_ic_anchor = xt_ic
+                        _constraints_i.append(dde.icbc.PointSetBC(xt_ic, prev_u[:, _oi_ta:_oi_ta+1], component=_oi_ta))
+        elif _custom_bc_entries or _bc_panel_data_present:
             for _bi_ta, _be_ta in enumerate(_custom_bc_entries):
                 _btype_ta = _be_ta.get('type', 'dirichlet')
                 _bcomp_ta = int(_be_ta.get('component', 0) or 0)
@@ -3850,6 +3871,7 @@ if {config.time_adaptive}:
                 "optimizer2": "{config.optimizer2}",
                 "output_names": {repr(config.output_names)},
                 "num_outputs": {config.num_outputs},
+                "pde_mode": {repr(getattr(config, "pde_mode", "expressions"))},
             }}
             with open(_os.path.join(_step_dir, "step_config.json"), "w") as _scf:
                 _json.dump(_step_cfg, _scf, indent=2)
@@ -4575,6 +4597,26 @@ if {config.time_adaptive}:
         print("=== Time-Adaptive Error Analysis Complete ===")"""
 
 
+def _python_pde(config):
+    """Equations as: Python (Equations page): pde() in python_code replaces the expressions."""
+    return _cfg_get(config, "pde_mode", "expressions") == "python"
+
+
+def _python_conditions(config):
+    """Conditions as: Python (Boundary / Initial conditions pages): conditions(c) in python_code replaces the
+    rows."""
+    return _cfg_get(config, "conditions_mode", "rows") == "python"
+
+
+def _pde_constant_dict(config):
+    """{name: value} of the named constants, for equations written in Python (the expressions get the
+    values substituted into their text instead). Read before _effective_config empties `constants`."""
+    try:
+        return {n: v for n, _e, v in _constant_values(config)}
+    except ValueError:
+        return {}
+
+
 def _n_equations(config):
     """How many PDE residuals the problem has: config.num_equations,
     or one per output when it's 0 (every config saved before this round).
@@ -5115,6 +5157,17 @@ def _effective_config(config):
     import dataclasses as _dc
     if getattr(config, "steady_state", False) and getattr(config, "time_adaptive", False):
         config = _dc.replace(config, time_adaptive=False)
+    if _python_pde(config):
+        # Equations in Python: the expression text is not used, so nothing derived from it (fractional
+        # and integral terms, the coordinates and derivatives it names) may act on the scripts.
+        _n = _n_equations(config)
+        config = _dc.replace(config, pde_expressions="|".join(["0"] * _n), pde_expression="0")
+    if _python_conditions(config):
+        # Conditions in Python: the rows are not used, so nothing derived from them (points files, Interface
+        # 2D's uniform points, Operator rows using X, the IC file's anchors, exact ICs) may act on the scripts.
+        _n_o = max(1, int(config.num_outputs or 1))
+        config = _dc.replace(config, custom_bc_json="[]", ic_active=",".join(["False"] * _n_o),
+                             forward_ic_from_file=False, ic_file_anchors=False, ic_hard="")
     # A non-box shape: its own bounding box is the domain box the scripts use
     # (sides, plot areas, Error Analysis grids), not the hidden box fields.
     _sb = _shape_bbox(config)
@@ -5250,8 +5303,24 @@ def _small_problem_gpu_tip(config):
             '          "Settings -> GPU / Hardware -> Train on: CPU.")\n')
 
 
+def _dry_run_code():
+    """_dry_run(model, data, net) in the Solve script: with PINNSTUDIO_DRY_RUN set (the Python code page's
+    Check, and the tests) the script evaluates the equations on 64 training points and the initial loss of
+    every term, prints one JSON line (pde_code.parse_dry_run reads it) and stops, training nothing."""
+    return 'def _dry_run(model, data, net):\n    # PINNSTUDIO_DRY_RUN (the Python code page\'s Check, and the tests): the equations on 64 training points,\n    # the initial loss of every term, then stop -- one JSON line, nothing trained or saved\n    import json as _dr_json\n    import traceback as _dr_tb\n    try:\n        _dr_x = torch.as_tensor(np.asarray(data.train_x[:64])).requires_grad_(True)\n        dde.grad.clear()\n        _dr_r = pde(_dr_x, net(_dr_x))\n        _dr_r = _dr_r if isinstance(_dr_r, (list, tuple)) else [_dr_r]\n        model.train(iterations=0, display_every=1, verbose=0)\n        _dr_l = [float(_v) for _v in np.ravel(model.losshistory.loss_train[-1])]\n        _dr_names = (_py_cond.names() if _PY_CONDITIONS\n                     else [f"row {_i + 1}" for _i in range(len(_constraints))])\n        print("PINNSTUDIO_DRY_RUN " + _dr_json.dumps({"ok": True, "residuals": [list(_r.shape) for _r in _dr_r],\n                                                      "conditions": _dr_names, "losses": _dr_l}), flush=True)\n    except BaseException as _dr_e:\n        _dr_line = 0\n        for _fr in _dr_tb.extract_tb(_dr_e.__traceback__):\n            if _fr.filename == "<equations>":\n                _dr_line = _fr.lineno\n        print("PINNSTUDIO_DRY_RUN " + _dr_json.dumps({"ok": False, "error": f"{type(_dr_e).__name__}: {_dr_e}",\n                                                      "line": _dr_line}), flush=True)\n    raise SystemExit(0)\n'
+
+
 def generate_script(config):
+    _py_any = _python_pde(config) or _python_conditions(config)
+    _pde_consts = _pde_constant_dict(config) if _py_any else {}
     config = _effective_config(config)
+    if _py_any:
+        from pinnstudio.core import pde_code as _pde_code_mod
+        _pde_python_block = _pde_code_mod.solve_code(config, _pde_consts, equations=_python_pde(config),
+                                                     conditions=_python_conditions(config))
+    else:
+        _pde_python_block = ""
+    _py_cond = _python_conditions(config)
     # Naming convention: generation-time Python names in
     # this function use the same plain spelling as generate_clean_script()'s
     # (is_2d, is_3d, is_steady, line_slice_y, sol_ext, ...), so a fix ported
@@ -5863,6 +5932,9 @@ if _use_save:
         "geom_polygon_vertices": {repr(config.geom_polygon_vertices)},
         "geom_custom_shapes_json": {repr(config.geom_custom_shapes_json)},
         "pde_expressions": {repr(config.pde_expressions)},
+        "pde_mode": {repr(getattr(config, "pde_mode", "expressions"))},
+        "conditions_mode": {repr(getattr(config, "conditions_mode", "rows"))},
+        "python_code": {repr(getattr(config, "python_code", "") if (_python_pde(config) or _python_conditions(config)) else "")},
         "optimizer": {repr(config.optimizer)},
         "optimizer2": {repr(config.optimizer2)},
         "loss_type": {repr(config.loss_type)},
@@ -6379,6 +6451,7 @@ def _pde_standard(x, y{", _int_mat=None" if "_frac(" in (config.pde_expressions 
     return _res
 if not _IS_FECR:
     pde = _pde_standard
+{_pde_python_block}
 {_training_methods_defs(config)}
 # ── Geometry & Time domain ──────────────────────────────────
 # _build_geom() is the one place that turns the Geometry Type selector
@@ -6742,7 +6815,14 @@ class _Interface2DGeomAdapter:
         _n = self._gt.boundary_normal(x)
         return _n if self._is_steady else _n[:, :-1]
 
-if _custom_bc_entries or _bc_panel_data_present:
+_PY_CONDITIONS = {_py_cond!r}
+if _PY_CONDITIONS:
+    # The conditions, in Python (conditions(c) on the Python code page): boundary conditions, then initial ones
+    _py_cond = _run_conditions(geomtime)
+    _constraints.extend(_py_cond.objects())
+    print(f"Conditions from the Python code: {{len(_py_cond.objects('bc'))}} boundary, "
+          f"{{len(_py_cond.objects('ic'))}} initial ({{', '.join(_py_cond.names())}})")
+elif _custom_bc_entries or _bc_panel_data_present:
     for _bi, _be in enumerate(_custom_bc_entries):
         _btype = _be.get('type', 'dirichlet')
         _bcomp = int(_be.get('component', 0) or 0)
@@ -6985,7 +7065,12 @@ _wi = 0
 for _ei_w in range({_n_equations(config)}):  # one per equation
     _pde_w.append(_wm_list[_wi] if _wi < len(_wm_list) else 1.0); _wi += 1
 
-if _custom_bc_entries or _bc_panel_data_present:
+if _PY_CONDITIONS:
+    # each condition's weight= in the code, after the PDE weights from the Loss weights page
+    _multi_weights = list(_pde_w) + _py_cond.weights()
+    print(f"  PDE weights: {{_pde_w}}")
+    print(f"  Condition weights (Python code): {{_py_cond.weights()}}")
+elif _custom_bc_entries or _bc_panel_data_present:
     _bc_entry_w = []
     for _bi_w in range(len(_custom_bc_entries)):
         _bc_entry_w.append(_wm_list[_wi] if _wi < len(_wm_list) else 1.0); _wi += 1
@@ -7166,6 +7251,8 @@ def _warn_empty_conditions(_d):
               f"(e.g. a side such as 'left' on a disk or other curved shape). Change or remove them.")
 _warn_empty_conditions(data)
 
+
+{_dry_run_code()}
 # ── Parametric loop ──────────────────────────────────────────
 _summary = []
 
@@ -7215,6 +7302,8 @@ for _pval in _param_values:
         loss_weights=_multi_weights,
         external_trainable_variables=_inv_vars if _problem_type == "Inverse" else None
     )
+    if _os.environ.get("PINNSTUDIO_DRY_RUN"):
+        _dry_run(model, data, net)
 
     _iters = int(_pval) if (_parametric and _param_name == "phase1_iterations" and _pval is not None) else {config.iterations}
 
@@ -7232,7 +7321,10 @@ for _pval in _param_values:
         _ic_td_pre  = dde.geometry.TimeDomain({config.t_min}, {config.t_max})
         _ic_gt_pre  = dde.geometry.GeometryXTime(_ic_geom_pre, _ic_td_pre)
         _ic_ics_pre = []
-        if {config.forward_ic_from_file}:
+        if _PY_CONDITIONS:
+            # the code's initial conditions, on the pre-training domain
+            _ic_ics_pre.extend(_run_conditions(_ic_gt_pre).objects("ic"))
+        elif {config.forward_ic_from_file}:
             # Load IC from file for pre-training -- see _load_ic_from_file()
             # near the top of this script for the expected column layout.
             _ic_pre_xyt, _ic_pre_vals = _load_ic_from_file({repr(config.forward_ic_file)})
@@ -11823,6 +11915,43 @@ _EMPTY_COND_CHECK = '''def _warn_empty_conditions(_d):
 '''
 
 
+def _clean_pde_block(config, out_names, n_out, is_2d, is_3d, is_steady):
+    """The exported script's `def pde(x, y)` for the expressions: each derivative the equations name,
+    then the residuals (generate_clean_script)."""
+    pde_exprs = [_simplify_pde_expr(e) for e in config.pde_expressions.split("|")]
+    pde_check_str = "|".join(pde_exprs)
+    pde_body = []
+    for oi, oname in enumerate(out_names[:n_out]):
+        pde_body.append(f"    {oname} = y[:, {oi}:{oi + 1}]")
+        for varname, rhs in _clean_needed_derivs(oname, oi, n_out, pde_check_str, is_2d, is_3d, is_steady):
+            pde_body.append(f"    {varname} = {rhs}")
+    n_eq = _n_equations(config)
+    pde_cols = _pde_coord_columns(_pde_coord_names(pde_exprs[:n_eq]), is_2d, is_3d, is_steady)
+    if pde_cols:
+        pde_body.append("    # coordinates used by the equation itself (one column each)")
+        pde_body.append("    _X = x")
+        for _cn, _cc in pde_cols:
+            pde_body.append(f"    {_cn} = _X[:, {_cc}:{_cc + 1}]")
+    uses_frac = "_frac(" in pde_check_str
+    if uses_frac:
+        pde_body.append("    _frac = lambda _v: _frac_apply(int_mat, _v)   # fractional operator")
+    ret = "_res = " if uses_frac else "return "
+    if n_eq == 1:
+        pde_body.append(f"    {ret}{pde_exprs[0].strip()}")
+    else:
+        exprs = [e.strip() for e in pde_exprs[:n_eq]]
+        pde_body.append(f"    {ret}[")
+        for e in exprs:
+            pde_body.append(f"        {e},")
+        pde_body.append("    ]")
+    if uses_frac:
+        pde_body.append("    # the residual lives on the FPDE points only (the rest are auxiliary points)")
+        pde_body.append("    _nr = _frac_rows(int_mat) if int_mat is not None else len(x)")
+        pde_body.append("    return " + ("[_r[:_nr] for _r in _res]" if n_eq > 1 else "_res[:_nr]"))
+    pde_block = ("def pde(x, y, int_mat=None):\n" if uses_frac else "def pde(x, y):\n") + "\n".join(pde_body)
+    return pde_block
+
+
 def generate_clean_script(config):
     """Builds the "Export as DeepXDE Script" file: a short, plain,
     tutorial-style DeepXDE/PyTorch + matplotlib script for exactly this
@@ -11836,6 +11965,11 @@ def generate_clean_script(config):
     # Time windows with backward compatibility (bc-PINN), a growing time range, initial-condition guided
     # learning or resampling in each window: these are written only by generate_script() so far, so the
     # export is that script (standalone too), and it trains exactly the model Solve trains.
+    if _python_conditions(config):
+        # conditions(c) runs on the rows' own helpers in the Solve script, so the export is that script
+        return ("# Exported from PINNStudio. This problem's boundary and initial conditions are written in Python\n"
+                "# (the Python code page), so the export is the full script PINNStudio's Solve runs (it trains\n"
+                "# exactly the same model).\n" + generate_script(config))
     _ta_extras = _ta_clean_unsupported(config)
     if _ta_extras:
         return ("# Exported from PINNStudio. This problem uses time windows with " + ", ".join(_ta_extras)
@@ -11854,6 +11988,7 @@ def generate_clean_script(config):
         _const_header = list(_const_header) + [
             "# Note: this script draws the line, surface and error-analysis figures; the 3D slice and 3D view",
             "# comparisons (Plot settings: 3D grid resolution, iso level) are drawn by PINNStudio's Solve only."]
+    _pde_consts = _pde_constant_dict(config) if _python_pde(config) else {}
     config = _effective_config(config)
     is_2d = config.problem_dim == "2D"
     is_3d = config.problem_dim == "3D"
@@ -11900,37 +12035,10 @@ def generate_clean_script(config):
     v1 = "t" if getattr(config, "_ode", False) else "x"   # An ODE's variable
 
     # ---- PDE expressions (host-resolved derivative terms) --------------
-    pde_exprs = [_simplify_pde_expr(e) for e in config.pde_expressions.split("|")]
-    pde_check_str = "|".join(pde_exprs)
-    pde_body = []
-    for oi, oname in enumerate(out_names[:n_out]):
-        pde_body.append(f"    {oname} = y[:, {oi}:{oi + 1}]")
-        for varname, rhs in _clean_needed_derivs(oname, oi, n_out, pde_check_str, is_2d, is_3d, is_steady):
-            pde_body.append(f"    {varname} = {rhs}")
-    n_eq = _n_equations(config)
-    pde_cols = _pde_coord_columns(_pde_coord_names(pde_exprs[:n_eq]), is_2d, is_3d, is_steady)
-    if pde_cols:
-        pde_body.append("    # coordinates used by the equation itself (one column each)")
-        pde_body.append("    _X = x")
-        for _cn, _cc in pde_cols:
-            pde_body.append(f"    {_cn} = _X[:, {_cc}:{_cc + 1}]")
-    uses_frac = "_frac(" in pde_check_str
-    if uses_frac:
-        pde_body.append("    _frac = lambda _v: _frac_apply(int_mat, _v)   # fractional operator")
-    ret = "_res = " if uses_frac else "return "
-    if n_eq == 1:
-        pde_body.append(f"    {ret}{pde_exprs[0].strip()}")
-    else:
-        exprs = [e.strip() for e in pde_exprs[:n_eq]]
-        pde_body.append(f"    {ret}[")
-        for e in exprs:
-            pde_body.append(f"        {e},")
-        pde_body.append("    ]")
-    if uses_frac:
-        pde_body.append("    # the residual lives on the FPDE points only (the rest are auxiliary points)")
-        pde_body.append("    _nr = _frac_rows(int_mat) if int_mat is not None else len(x)")
-        pde_body.append("    return " + ("[_r[:_nr] for _r in _res]" if n_eq > 1 else "_res[:_nr]"))
-    pde_block = ("def pde(x, y, int_mat=None):\n" if uses_frac else "def pde(x, y):\n") + "\n".join(pde_body)
+    pde_block = _clean_pde_block(config, out_names, n_out, is_2d, is_3d, is_steady)
+    if _python_pde(config):
+        from pinnstudio.core import pde_code as _pde_code_mod
+        pde_block = _pde_code_mod.export_code(config, _pde_consts)
 
     # ---- Geometry --------------------------------------------------------
     tri_verts = _parse_vertex_list(config.geom_triangle_vertices)

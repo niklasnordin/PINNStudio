@@ -39,7 +39,8 @@ def _class_attr(name):
 SITE_URL = "https://asfandyarkhan72.github.io/PINNStudio/"
 GUIDE_PAGES = {"problem", "equations", "inverse", "geometry", "points", "initial-conditions",
                "boundary-conditions", "network", "training", "loss-weights", "adaptive", "sweeps", "results",
-               "restore", "solve", "error-analysis", "export", "settings", "interface", "choosing-a-strategy"}
+               "restore", "solve", "error-analysis", "export", "settings", "interface", "choosing-a-strategy",
+               "python-code", "network-designer"}
 
 
 def test_help_buttons_open_guide_pages():

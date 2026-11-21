@@ -34,3 +34,11 @@ class Prompter:
 
     def inform(self, title: str, text: str) -> None:
         """Tell the user something that needs no answer."""
+
+    def confirm(self, title: str, text: str) -> bool:
+        """A yes/no question (replace this, discard that): True for yes."""
+        return False
+
+    def open_external(self, path: str) -> bool:
+        """Open a file with the system's program for it (the user's editor); True when that started."""
+        return False

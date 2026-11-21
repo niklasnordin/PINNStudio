@@ -87,3 +87,13 @@ def remember(items) -> None:
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(data, fh, indent=1)
     os.replace(tmp, store_path())
+
+
+def code_item(text: str, name: str = "the problem's Python code") -> dict:
+    """An item (as `needed` gives) for a piece of code outside a design: the problem's Python code."""
+    return {"kind": "code", "name": name, "sha256": sha256_text(text), "size": len((text or "").encode("utf-8")),
+            "text": text or "", "path": "", "problem": "", "context": "problem"}
+
+
+def is_trusted(item: dict) -> bool:
+    return bool(item.get("sha256")) and not item.get("problem") and bool(_load().get(item["sha256"]))

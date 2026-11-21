@@ -9,6 +9,9 @@ the time interval, \( t = t_{\min} \). It has one block per output (set by **Out
 Background: [Initial conditions and imported data](../reference/initial-conditions.md),
 [Exact constraints](../reference/exact-constraints.md).
 
+**Conditions as:** at the top of the page chooses these blocks or **Python code** (`c.initial(...)` in
+`conditions(c)` on the [Python code](python-code.md) page), together with the boundary conditions.
+
 ## Give an initial condition as a formula
 
 Type the initial value as an expression of the space coordinates (`x`; `x, y`; `x, y, z`), using the

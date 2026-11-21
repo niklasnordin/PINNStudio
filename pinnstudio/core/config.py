@@ -202,6 +202,14 @@ class PINNConfig:
     num_equations: int = 0
     output_names: str = "u"
     pde_expressions: str = "du_t - 0.4 * du_xx"
+    # The problem in Python (the Python code page, core/pde_code.py): one module that may define
+    # pde(x, y, d), the residuals, and conditions(c), the boundary and initial conditions.
+    # pde_mode "python" takes the equations from it instead of pde_expressions; conditions_mode
+    # "python" takes the conditions from it instead of the rows (custom_bc_json, ic_*). The
+    # expressions and rows are kept, so switching back loses nothing.
+    pde_mode: str = "expressions"
+    conditions_mode: str = "rows"
+    python_code: str = ""
     # Named constants: JSON list of {"name", "value"}; each value a
     # number or an expression in math functions and earlier constants. Usable
     # by name in every expression of the problem (see core/constants.py).
@@ -1120,12 +1128,27 @@ class PINNConfig:
         # and second derivatives, the third x-derivative in 1D, and fourth-order
         # ones of the forms xxxx/xxyy/xxtt/...). A name outside it passed here and
         # stopped both scripts with NameError at the first training step.
-        _bad_d = _unsupported_derivatives(self)
+        _python_pde = self.pde_mode == "python"
+        _python_cond = self.conditions_mode == "python"
+        _pde_text = "" if _python_pde else (self.pde_expressions or "")
+        if self.pde_mode not in ("expressions", "python"):
+            errors.append(f"Equations as: {self.pde_mode!r} is not a choice (expressions or python).")
+        if self.conditions_mode not in ("rows", "python"):
+            errors.append(f"Conditions as: {self.conditions_mode!r} is not a choice (rows or python).")
+        if _python_pde or _python_cond:
+            from pinnstudio.core import pde_code as _pde_code_mod
+            errors.extend(_pde_code_mod.check_source(
+                self.python_code or "", needs=(("pde",) if _python_pde else ()) + (("conditions",) if _python_cond else ())))
+        if _python_cond:
+            if any(h.strip() == "True" for h in (self.ic_hard or "").split(",")):
+                errors.append("Exact initial conditions are built from the Initial conditions rows: with the "
+                              "conditions in Python, turn Exact off (or write the conditions as rows).")
+        _bad_d = [] if _python_pde else _unsupported_derivatives(self)
         if _bad_d:
             errors.append("Equations: " + ", ".join(_bad_d) + (" is" if len(_bad_d) == 1 else " are")
                           + " not available (see Derivative syntax on the Equations page) -- write the equation with "
                           "the derivatives PINNStudio provides, e.g. a third derivative as a new output.")
-        if "integral(" in (self.pde_expressions or ""):
+        if "integral(" in _pde_text:
             if not (self.problem_dim == "ODE" or (self.problem_dim == "1D" and self.steady_state)):
                 errors.append("integral(...) terms are available for ODE problems (and steady 1D problems): "
                               "the integral runs over the one variable, from its start to the current point.")
@@ -1134,7 +1157,7 @@ class PINNConfig:
             if "s" in [n.strip() for n in (self.output_names or "").split(",")]:
                 errors.append("An output can't be named 's' in a problem with integral(...) terms: s is the integration variable.")
         import re as _re_frv
-        if _re_frv.search(r"(?<![\w.])frac\(", self.pde_expressions or ""):
+        if _re_frv.search(r"(?<![\w.])frac\(", _pde_text):
             _sd = {"1D": 1, "2D": 2, "3D": 3}.get(self.problem_dim)
             try:
                 _res = [int(float(v)) for v in str(self.fractional_resolution).replace(";", ",").split(",") if v.strip()]

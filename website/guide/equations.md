@@ -51,6 +51,10 @@ the Equations page. In an ODE, outputs cannot be called `x` or `t`, and with `in
 
 ## Write the equations
 
+For what one expression per equation cannot say (intermediate quantities, a flux's divergence, any
+derivative), set **Equations as:** to **Python code** and write `pde(x, y, d)` on the [Python
+code](python-code.md) page; it starts from these expressions.
+
 Derivatives are written `d<output>_<variables>`:
 
 | You type | Means |

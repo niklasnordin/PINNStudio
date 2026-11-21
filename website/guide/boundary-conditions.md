@@ -13,6 +13,10 @@ with its type and output. Selecting one shows that row alone.
 Background: [Boundary conditions](../reference/boundary-conditions.md),
 [Exact constraints](../reference/exact-constraints.md).
 
+**Conditions as:** at the top of the page chooses **Rows** (this list) or **Python code**: `conditions(c)` on
+the [Python code](python-code.md) page, written from these rows to start, where any kind of condition can be
+added. The choice covers the initial conditions too.
+
 ## Add a condition
 
 1. Click **Add Boundary Condition** (or right-click **Boundary conditions** in the tree and choose

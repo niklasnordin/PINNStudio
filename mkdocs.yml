@@ -153,6 +153,7 @@ nav:
       - The interface: guide/interface.md
       - Problem: guide/problem.md
       - Equations, outputs and constants: guide/equations.md
+      - The problem in Python: guide/python-code.md
       - Geometry and domain: guide/geometry.md
       - Collocation points: guide/points.md
       - Initial conditions: guide/initial-conditions.md

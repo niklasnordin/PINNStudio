@@ -56,6 +56,20 @@ EXAMPLES.append(_dx._ex(
          "derivative on the spherical surface (Neumann, a coordinate expression); compared with the exact solution."))
 CATALOG["3D Poisson (Cube with spherical cut-out)"] = ("Poisson 3D – cube with spherical cut-out", "")
 
+# Burgers' equation written in Python (the Python code page): the equation in conservation form, with the
+# flux's derivative taken by the d helper, and the conditions as functions. The same problem as the RAR
+# example's expressions and rows, without RAR, so the two can be compared.
+_BURGERS_PY = '"""Burgers\' equation, u_t + (u^2/2)_x = nu u_xx on [-1, 1] x [0, 1], written in Python."""\nNU = 0.01 / np.pi\n\n\ndef flux(u):\n    return u * u / 2\n\n\ndef pde(x, y, d):\n    """The residual of Burgers\' equation in conservation form: the flux\'s x-derivative is\n    d.diff(flux(u), "x"), which the expressions cannot write."""\n    return [d("u", "t") + d.diff(flux(d.u), "x") - NU * d("u", "x", "x")]\n\n\ndef conditions(c):\n    """u = 0 at both ends; u = -sin(pi x) at t = 0."""\n    c.dirichlet("u", where=lambda X, on: on and (c.isclose(X[0], c.x_min) or c.isclose(X[0], c.x_max)),\n                value=0, name="u = 0 at the ends")\n    c.initial("u", lambda x: -np.sin(np.pi * x[:, 0:1]), name="u at t = 0")\n'
+_burgers = next(e for e in _dx.EXAMPLES if e.name == "Burgers equation with RAR")
+EXAMPLES.append(_dx._ex(
+    "Burgers equation (Python code)", _dx.FORWARD, "",
+    dict(_burgers.settings),
+    dict(adapt_method="None", pde_mode="python", conditions_mode="python", python_code=_BURGERS_PY),
+    note="Burgers' equation on [-1, 1] with u(x, 0) = -sin(pi x), written on the Python code page: pde() in "
+         "conservation form (the flux u^2/2 differentiated by d.diff) and conditions() with functions for "
+         "where and the values. Compared with the reference solution at five times."))
+CATALOG["Burgers equation (Python code)"] = ("Burgers 1D – Python code", "")
+
 BY_NAME = {e.name: e for e in EXAMPLES}
 
 

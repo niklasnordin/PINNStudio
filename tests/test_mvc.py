@@ -41,7 +41,8 @@ LAUNCHER = {"pinnstudio/__init__.py", "pinnstudio/__main__.py", "pinnstudio/main
 # do no I/O and fit nothing (website/developer/mvc.md, VIEW_SAFE).
 VIEW_SAFE = {"pinnstudio.core.netdesign.design", "pinnstudio.core.netdesign.params",
              "pinnstudio.core.netdesign.layers", "pinnstudio.core.netdesign.presets.PRESETS"}
-MUTATORS = ("set_design", "reset", "undo", "redo", "set_path", "select", "set_io", "set_message")
+MUTATORS = ("set_design", "reset", "undo", "redo", "set_path", "select", "set_io", "set_message",
+            "put_code", "put_modes", "put_result", "put_message")
 QT = ("PySide6", "shiboken6")
 QT_MPL = ("matplotlib.backends.backend_qt", "matplotlib.backends.backend_qtagg", "matplotlib.backends.qt_compat")
 COMPOSER = "pinnstudio/ui/main_window.py"
@@ -111,7 +112,7 @@ def _receiver_text(node):
     return ".".join(reversed(parts))
 
 
-STATE_NAMES = ("state", "_state", "design_state", "s")
+STATE_NAMES = ("state", "_state", "design_state", "python_state", "s")
 
 
 def _is_state(expr, aliases) -> bool:
