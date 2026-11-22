@@ -104,6 +104,29 @@ class PythonCodeController(QObject):
             return False
         return self._put_function("conditions", src, ask, "the conditions")
 
+    def write_exact_initial(self, ask: bool = True) -> bool:
+        """output_transform(x, y) holding each output to its initial condition exactly, from the Initial
+        conditions page's expressions."""
+        try:
+            src = PC.exact_initial_transform(self._config())
+        except ValueError as exc:
+            self.prompter.inform("Python code", f"Exact initial conditions: {exc}")
+            return False
+        return self._put_function("output_transform", src, ask, "exact initial conditions")
+
+    def add_hook(self, name: str, ask: bool = True) -> bool:
+        """A start for one of the hooks (output_transform, feature_transform, points, callbacks)."""
+        return self._put_function(name, PC.HOOK_TEMPLATES[name], ask, "a template")
+
+    def in_use(self) -> str:
+        """The page's "In use:" line: what of the code the problem uses."""
+        try:
+            used = PC.in_use(self._config())
+        except Exception:
+            used = []
+        return ", ".join(used) if used else "nothing yet (choose Python on the Equations or conditions pages, " \
+                                              "or define a hook)"
+
     def _put_function(self, name, src, ask, what) -> bool:
         code = self.state.code
         if ask and PC.has_function(code, name) and not self.prompter.confirm(
@@ -341,6 +364,8 @@ def _summary(res: dict) -> str:
         conds = res.get("conditions") or []
         shapes = (f"{len(r)} residual{'s' if len(r) != 1 else ''} ({', '.join('×'.join(str(v) for v in s) for s in r)})"
                   if r else "the equations through their loss")
-        return f"Check passed: {shapes}, {len(conds)} condition{'s' if len(conds) != 1 else ''}"
+        hk = res.get("hooks") or []
+        return (f"Check passed: {shapes}, {len(conds)} condition{'s' if len(conds) != 1 else ''}"
+                + (f"; hooks used: {', '.join(hk)}" if hk else ""))
     where = f" (line {res['line']})" if res.get("line") else ""
     return f"Check failed{where}: {res.get('error', '')}"

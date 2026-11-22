@@ -84,7 +84,41 @@ def n_equations(config) -> int:
 
 # ── checks on the source ──────────────────────────────────────────────
 _SIGNATURES = {"pde": (3, "pde(x, y, d), which returns the residuals"),
-               "conditions": (1, "conditions(c), which adds the boundary and initial conditions")}
+               "conditions": (1, "conditions(c), which adds the boundary and initial conditions"),
+               "output_transform": (2, "output_transform(x, y), which returns the network's outputs changed"),
+               "feature_transform": (1, "feature_transform(x), which returns the network's input features"),
+               "points": (2, "points(geom, n), which returns n collocation points"),
+               "callbacks": (0, "callbacks(), which returns a list of DeepXDE callbacks")}
+# functions the module may define besides pde and conditions; each is used when it is there
+HOOKS = ("output_transform", "feature_transform", "points", "callbacks")
+
+
+def hooks(code: str) -> list:
+    """The HOOKS the module defines at its top level, in HOOKS order ([] when it does not parse)."""
+    try:
+        tree = ast.parse(code or "")
+    except SyntaxError:
+        return []
+    names = {n.name for n in tree.body if isinstance(n, ast.FunctionDef)}
+    return [h for h in HOOKS if h in names]
+
+
+def uses_module(config) -> bool:
+    """True when the Solve script runs the Python code: the equations or the conditions are in Python, or the
+    module defines one of the HOOKS."""
+    return (getattr(config, "pde_mode", "expressions") == "python"
+            or getattr(config, "conditions_mode", "rows") == "python"
+            or bool(hooks(getattr(config, "python_code", "") or "")))
+
+
+def in_use(config) -> list:
+    """What of the module the problem uses, for the page's "In use:" line."""
+    out = []
+    if getattr(config, "pde_mode", "expressions") == "python":
+        out.append("equations")
+    if getattr(config, "conditions_mode", "rows") == "python":
+        out.append("conditions")
+    return out + hooks(getattr(config, "python_code", "") or "")
 
 
 def check_source(code: str, needs=("pde",)) -> list:
@@ -109,7 +143,7 @@ def check_source(code: str, needs=("pde",)) -> list:
         else:
             errors.append(f"Python code, line {node.lineno}: only imports, functions, classes and "
                           "assignments at the top level (they run as the script starts); put the rest in a function")
-    for name in needs:
+    for name in tuple(needs) + tuple(h for h in HOOKS if h in found and h not in needs):
         n_args, what = _SIGNATURES[name]
         fn = found.get(name)
         if fn is None:
@@ -119,9 +153,10 @@ def check_source(code: str, needs=("pde",)) -> list:
             errors.append(f"Python code, line {fn.lineno}: {name}() cannot be async")
             continue
         a = fn.args
-        if len(a.posonlyargs) + len(a.args) != n_args or a.vararg or a.kwonlyargs or a.kwarg:
-            errors.append(f"Python code, line {fn.lineno}: {name}() takes {n_args} argument"
-                          f"{'s' if n_args > 1 else ''}, {what.split(',')[0]}")
+        if len(a.posonlyargs) + len(a.args) - len(a.defaults) > n_args or len(a.posonlyargs) + len(a.args) < n_args \
+                or a.vararg or a.kwonlyargs or a.kwarg:
+            errors.append(f"Python code, line {fn.lineno}: {name}() takes {n_args or 'no'} argument"
+                          f"{'' if n_args == 1 else 's'}, {what.split(',')[0]}")
     return errors
 
 
@@ -193,6 +228,68 @@ def template(config) -> str:
         o = outputs(config)[0]
         res = ",\n".join(f"        0 * d.{o}" for _ in range(n_equations(config)))
         return "def pde(x, y, d):\n" + _DOC + f"    return [\n{res},\n    ]\n"
+
+
+HOOK_TEMPLATES = {
+    "output_transform": '''def output_transform(x, y):
+    """The network's outputs, changed: exact conditions, as in DeepXDE's examples. x holds the inputs as
+    columns (x[:, 0:1] is the first), y the raw network outputs; return as many columns as there are
+    outputs. Example: u = 0 at x = 0 and x = 1, exactly: return x[:, 0:1] * (1 - x[:, 0:1]) * y"""
+    return y
+''',
+    "feature_transform": '''def feature_transform(x):
+    """The network's input features: return any number of columns (the first layer is sized to fit).
+    Example, periodic in x with period 2: torch.cat([torch.cos(np.pi * x[:, 0:1]), torch.sin(np.pi * x[:, 0:1]),
+    x[:, 1:]], dim=1)"""
+    return x
+''',
+    "points": '''def points(geom, n):
+    """The n collocation points of the equations (geom is DeepXDE's geometry; in a time window, that window's).
+    Example, half of them in the first tenth of the time: np.vstack([geom.random_points(n - n // 2),
+    a band of your own])"""
+    return geom.random_points(n)
+''',
+    "callbacks": '''def callbacks():
+    """DeepXDE callbacks for every training phase (called once per phase), e.g.
+    [dde.callbacks.VariableValue(...)] or a class of your own (dde.callbacks.Callback)."""
+    return []
+''',
+}
+
+
+def exact_initial_transform(config) -> str:
+    """output_transform(x, y) that holds each output with an active initial condition to it exactly, as the
+    Initial conditions page's Exact does: IC(x) + (t - t0) / (t1 - t0) * y. Raises ValueError when the problem
+    has no time or no initial condition written as an expression."""
+    from pinnstudio.core import codegen as _cg
+    if getattr(config, "steady_state", False) or getattr(config, "problem_dim", "") == "ODE":
+        raise ValueError("an exact initial condition needs a time-dependent problem with space")
+    outs = outputs(config)
+    exprs = (getattr(config, "ic_expressions", "") or "").split("|")
+    active = [a.strip() == "True" for a in (getattr(config, "ic_active", "") or "").split(",")]
+    t0, t1 = float(config.t_min), float(config.t_max)
+    t_col = len(space_axes(config))
+    lines, cols = [], []
+    for i, o in enumerate(outs):
+        e = exprs[i].strip() if i < len(exprs) else ""
+        if i < len(active) and active[i] and e:
+            dim = getattr(config, "problem_dim", "1D")
+            ic = _cg._simplify_expr(e, dim == "2D", dim == "3D")
+            ic = re.sub(r"x\[:,\s*(\d+)\]", lambda m: f"x[:, {m.group(1)}:{int(m.group(1)) + 1}]", ic)
+            ic = re.sub(r"\bnp\.", "torch.", ic)
+            lines.append(f"    ic_{o} = {ic}")
+            cols.append(f"ic_{o} + tau * y[:, {i}:{i + 1}]")
+        else:
+            cols.append(f"y[:, {i}:{i + 1}]")
+    if not lines:
+        raise ValueError("no initial condition is written as an expression")
+    body = (", ".join(cols) if len(cols) > 1 else cols[0])
+    ret = f"torch.cat([{body}], dim=1)" if len(cols) > 1 else body
+    return ("def output_transform(x, y):\n"
+            '    """Exact initial conditions (written from the Initial conditions page): at t = '
+            f'{t0:g} the outputs are their initial values, whatever the network gives."""\n'
+            f"    tau = (x[:, {t_col}:{t_col + 1}] - {t0!r}) / {t1 - t0!r}\n"
+            + "\n".join(lines) + f"\n    return {ret}\n")
 
 
 # ── editing the module ────────────────────────────────────────────────
@@ -487,6 +584,33 @@ def _cond_column(_f):
     return _g
 
 
+class _UserLoss:
+    # c.loss: a loss term of the user's own. fn(x, y, d) gets the whole training batch, as pde() does (d.rows
+    # is this term's rows); a column for every point is kept on this term's rows, a single number is the
+    # residual at each of them. DeepXDE calls collocation_points and error on any condition.
+    def __init__(self, fn, X):
+        self.func = fn
+        self.points = np.asarray(X, dtype=dde.config.real(np))
+
+    def collocation_points(self, X):
+        return self.points
+
+    def error(self, X, inputs, outputs, beg, end, aux_var=None):
+        _d = _Deriv(inputs, outputs, _pde_names())
+        _d.rows = slice(beg, end)
+        _r = self.func(inputs, outputs, _d)
+        if not torch.is_tensor(_r):
+            _r = torch.as_tensor(_r, dtype=outputs.dtype, device=outputs.device)
+        if _r.numel() == 1:
+            return _r.reshape(1, 1).expand(end - beg, 1)
+        if _r.shape[0] == inputs.shape[0]:
+            _r = _r[beg:end]
+        if _r.shape[0] != end - beg:
+            raise ValueError(f"c.loss: fn returned {tuple(_r.shape)}; return one value, or a column for every "
+                             f"point of the batch ({inputs.shape[0]})")
+        return _r.reshape(end - beg, -1)
+
+
 class _Cond:
     # c in conditions(c): every call adds one loss term, in order (boundary conditions, then initial ones)
 
@@ -508,7 +632,7 @@ class _Cond:
             if _sn == n or (_PDE_ODE and {"start": "left", "end": "right"}.get(n) == _sn):
                 return lambda X, _c=_c, _v=_v: bool(np.isclose(X[_c], _v))
         raise AttributeError(f"c.{n}: no such name (the calls are dirichlet, neumann, robin, periodic, operator, "
-                             "points, initial, initial_points, row and add)")
+                             "points, initial, initial_points, row, loss and add)")
 
     @staticmethod
     def isclose(a, b):
@@ -619,6 +743,17 @@ class _Cond:
         return self._put("bc", _bc_from_row(d, len(self.items), self.geom), weight,
                          name or f"{d.get('type', 'dirichlet')} row")
 
+    def loss(self, fn, points="domain", n=1000, weight=1.0, name=None):
+        # a term of your own: fn(x, y, d) -> residual (see _UserLoss); points: "domain", "boundary" or an array
+        if isinstance(points, str):
+            if points not in ("domain", "boundary"):
+                raise ValueError("c.loss(points=): 'domain', 'boundary' or an array of points")
+            _X = (self.geom.random_points(int(n)) if points == "domain"
+                  else self.geom.random_boundary_points(int(n)))
+        else:
+            _X = np.asarray(points, dtype=float)
+        return self._put("bc", _UserLoss(fn, _X), weight, name or "loss")
+
     def add(self, cond, kind="bc", weight=1.0, name=None, output=None):
         if kind not in ("bc", "ic"):
             raise ValueError("c.add(..., kind=): 'bc' or 'ic'")
@@ -679,9 +814,51 @@ def _pde_python(x, y):
     return _pde_residuals(_pde_user(x, y, _Deriv(x, y, _pde_names())), {n_eq}, x.shape[0])
 pde = _pde_python
 '''
+    hk = hooks(code)
+    if "callbacks" in hk:
+        out += '''
+
+def _pde_user_callbacks():
+    # the Python code's callbacks(): called for every training phase, so each phase gets new ones
+    _cbs = _PDE_NS["callbacks"]()
+    return list(_cbs or [])
+'''
+    if "points" in hk:
+        out += POINTS_HELPER
     if conditions:
         out += COND_HELPER
     return out
+
+
+POINTS_HELPER = '''
+
+def _pde_points_wrap(_cls):
+    # points(geom, n) in the Python code gives the equations' collocation points: the training data of this
+    # script's pde takes them as anchors with no domain points of its own (resampling asks again)
+    _orig = _cls.train_points
+    if getattr(_orig, "_pde_points", False):
+        return
+
+    def train_points(self):
+        if getattr(self, "train_x_all", None) is not None or self.pde is not globals().get("pde") \\
+                or not self.num_domain:
+            return _orig(self)
+        _n, _a = self.num_domain, self.anchors
+        _P = np.asarray(_PDE_NS["points"](self.geom, _n), dtype=dde.config.real(np))
+        if _P.ndim != 2 or _P.shape[1] != self.geom.dim:
+            raise ValueError(f"points(geom, n) returned an array of shape {_P.shape}; it needs (n, {self.geom.dim})")
+        self.num_domain, self.anchors = 0, (_P if _a is None else np.vstack((_a, _P)))
+        try:
+            return _orig(self)
+        finally:
+            self.num_domain, self.anchors = _n, _a
+    train_points._pde_points = True
+    _cls.train_points = train_points
+
+
+_pde_points_wrap(dde.data.PDE)
+_pde_points_wrap(dde.data.TimePDE)
+'''
 
 
 def export_code(config, constants: dict) -> str:

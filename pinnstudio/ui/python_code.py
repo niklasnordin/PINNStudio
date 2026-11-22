@@ -152,6 +152,15 @@ class PythonCodePage(QWidget):
             lambda _c=False: controller.write_equations())
         menu.addAction("The conditions, from the Boundary and Initial conditions rows").triggered.connect(
             lambda _c=False: controller.write_conditions())
+        menu.addAction("Exact initial conditions, from the Initial conditions page").triggered.connect(
+            lambda _c=False: controller.write_exact_initial())
+        menu.addSeparator()
+        hooks = menu.addMenu("A hook to fill in")
+        for name, label in (("output_transform", "output_transform(x, y): the outputs changed (exact conditions)"),
+                            ("feature_transform", "feature_transform(x): the network's input features"),
+                            ("points", "points(geom, n): the collocation points"),
+                            ("callbacks", "callbacks(): DeepXDE callbacks for training")):
+            hooks.addAction(label).triggered.connect(lambda _c=False, n=name: controller.add_hook(n))
         self.write_btn.setMenu(menu)
         self.check_btn = QPushButton("Check")
         self.check_btn.setToolTip("Run the Solve script once without training: the equations on a few points "
@@ -179,6 +188,10 @@ class PythonCodePage(QWidget):
         self.editor.setPlaceholderText("Choose Python on the Equations or Boundary conditions page, or "
                                        "Write from the page, to start")
         lay.addWidget(self.editor, 1)
+        self.in_use = QLabel("")
+        self.in_use.setObjectName("pageDesc")
+        self.in_use.setWordWrap(True)
+        lay.addWidget(self.in_use)
         self.names = QLabel("")
         self.names.setObjectName("pageDesc")
         self.names.setWordWrap(True)
@@ -195,9 +208,12 @@ class PythonCodePage(QWidget):
         self._typing.timeout.connect(self.flush)
         self.editor.textChanged.connect(self._typing.start)
         state.code_changed.connect(self._show_code)
+        state.code_changed.connect(self.refresh_names)
+        state.modes_changed.connect(self.refresh_names)
         state.checked.connect(self._show_result)
         state.message.connect(self._show_message)
         self._show_code()
+        QTimer.singleShot(0, self.refresh_names)
 
     def set_file_hints(self, folder_fn, name_fn):
         """Where Open in your editor writes the file: the problem's folder and name (the window knows them)."""
@@ -211,6 +227,7 @@ class PythonCodePage(QWidget):
 
     def refresh_names(self):
         self.names.setText("Names: " + self.ctl.names())
+        self.in_use.setText("In use: " + self.ctl.in_use())
 
     def _check(self):
         self.flush()
@@ -245,6 +262,8 @@ class PythonCodePage(QWidget):
                 txt += f"; conditions: {', '.join(conds)}"
             if losses:
                 txt += f"; initial losses: {', '.join(f'{v:.3g}' for v in losses)}"
+            if res.get("hooks"):
+                txt += f"; hooks used: {', '.join(res['hooks'])}"
             self.result.setText(txt)
             self.editor.mark_line(0)
         else:

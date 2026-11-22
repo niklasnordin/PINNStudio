@@ -253,3 +253,29 @@ def test_a_shipped_example_is_not_asked_about(tmp_path, monkeypatch):
     ctl = PythonCodeController(st, a, lambda: PINNConfig(python_code=st.code))
     ctl.load("python", "python", code)
     assert not st.from_outside and ctl.check_trust() and a.asked == 0
+
+
+def test_hooks_from_the_page_and_the_in_use_line(win):
+    w, a = win
+    w.python_page.refresh_names()
+    assert "nothing yet" in w.python_page.in_use.text()
+    assert w.python_code.write_exact_initial()
+    app.processEvents()
+    code = w.python_state.code
+    assert "def output_transform(x, y):" in code and "tau" in code
+    assert w.python_page.in_use.text() == "In use: output_transform"
+    assert w.python_state.uses_code()          # the code now runs, so trust applies
+    a.yes = False
+    assert not w.python_code.add_hook("output_transform")        # asked before replacing, and declined
+    assert w.python_state.code == code
+    assert w.python_code.add_hook("points")
+    app.processEvents()
+    assert "def points(geom, n):" in w.python_state.code
+    assert w.python_page.in_use.text() == "In use: output_transform, points"
+    cfg = w._build_config()
+    assert not [e for e in cfg.validate() if "Python" in e], cfg.validate()
+    assert w.python_code.check()
+    res = w.python_code.wait_for_check()
+    assert res["ok"] and res["hooks"] == ["output_transform", "points"], res
+    app.processEvents()
+    assert "hooks used: output_transform, points" in w.python_page.result.text()

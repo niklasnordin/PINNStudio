@@ -1071,6 +1071,8 @@ def _training_methods_cbs(config, var_name, pad):
         lines.append(f"{pad}{var_name}.append(_PointWeights(1000))")
     if _loss_balancing(config):
         lines.append(f"{pad}{var_name}.append(_LossBalancer(1000))")
+    if "callbacks" in _python_hooks(config):
+        lines.append(f"{pad}{var_name}.extend(_pde_user_callbacks())   # the Python code's callbacks()")
     return lines
 
 
@@ -1374,7 +1376,7 @@ def _designed_io(config):
     return names_effective(config)
 
 
-def _net_construction_helper_code(network_type, sigmas="1, 10", sigmas_t="1, 10", design="", io=None):
+def _net_construction_helper_code(network_type, sigmas="1, 10", sigmas_t="1, 10", design="", io=None, cfg=None):
     """Builds the literal Python source for a `_make_net(_flat_layers,
     _activation, _kernel_init, _weight_decay=0.0)` helper, embedded once
     near the top of every generated/restore script and called at every
@@ -1425,7 +1427,7 @@ _network_type = {network_type!r}
 {_ms_code}
 def _make_net(_flat_layers, _activation, _kernel_init, _weight_decay=0.0):
     _flat_layers = list(_flat_layers)
-    _hidden = list(_flat_layers[1:-1])
+{_feature_hook_sizing(cfg)}    _hidden = list(_flat_layers[1:-1])
     _n_out = _flat_layers[-1]
 {_ms_branch}    if _network_type == "PFNN":
         _eff_layers = [_flat_layers[0]] + [[_w] * _n_out for _w in _hidden] + [_n_out]
@@ -1437,6 +1439,15 @@ def _make_net(_flat_layers, _activation, _kernel_init, _weight_decay=0.0):
             _net = dde.nn.FNN(_flat_layers, _activation, _kernel_init)
     return _net
 '''
+
+
+def _feature_hook_sizing(cfg):
+    """A line for _make_net: with the Python code's feature_transform, the first layer takes one input per
+    feature (a probe call on two zero points gives their number)."""
+    if cfg is None or "feature_transform" not in _python_hooks(cfg):
+        return ""
+    return ("    _flat_layers[0] = int(_pde_hooks()[\"feature_transform\"](torch.zeros(2, _flat_layers[0])).shape[1])"
+            "   # the Python code's features\n")
 
 
 def _loss_plot_runtime_code(config):
@@ -4754,6 +4765,38 @@ def _python_conditions(config):
     return _cfg_get(config, "conditions_mode", "rows") == "python"
 
 
+def _python_hooks(config):
+    """The hooks (output_transform, feature_transform, points, callbacks) the Python code defines; each is used
+    when it is there (pde_code.HOOKS)."""
+    code = _cfg_get(config, "python_code", "") or ""
+    if not code.strip():
+        return []
+    from pinnstudio.core import pde_code as _pc
+    return _pc.hooks(code)
+
+
+def _pde_hooks_loader_code(cfg):
+    """`_pde_hooks()`: the Python code's namespace, for the network's transforms. In the Solve and exported
+    scripts it is the module they ran already (_PDE_NS); a restore script runs the module here, from the run's
+    model_config.json (its python_code and python_constants)."""
+    code = _cfg_get(cfg, "python_code", "") or ""
+    consts = _cfg_get(cfg, "python_constants", None)
+    if not isinstance(consts, dict):
+        consts = _pde_constant_dict(cfg) if not isinstance(cfg, dict) else {}
+    return f'''def _pde_hooks():
+    # the Python code page's module: the one this script ran, or (a restore script) run here
+    _ns = globals().get("_PDE_NS")
+    if _ns is None:
+        import deepxde as _dde_h
+        import numpy as _np_h
+        import torch as _torch_h
+        _ns = {{"dde": _dde_h, "np": _np_h, "torch": _torch_h, "__name__": "pinnstudio_equations", **{dict(consts)!r}}}
+        exec(compile({code!r}, "<equations>", "exec"), _ns)
+        globals()["_PDE_NS"] = _ns
+    return _ns
+'''
+
+
 def _pde_constant_dict(config):
     """{name: value} of the named constants, for equations written in Python (the expressions get the
     values substituted into their text instead). Read before _effective_config empties `constants`."""
@@ -4859,8 +4902,21 @@ def _net_transforms_code(cfg, fn_name="_apply_net_transforms"):
               "        sh = torch.tensor(out_shift, dtype=y.dtype, device=y.device)",
               "        return y * sc + sh",
               "    net.apply_output_transform(_output_transform)"]
+    hk = _python_hooks(cfg)
+    if "feature_transform" in hk:
+        L += ["    _hooks = _pde_hooks()",
+              "    net.apply_feature_transform(_hooks[\"feature_transform\"])   # the Python code's feature_transform"]
+    if "output_transform" in hk:
+        L += ["    _hooks = _pde_hooks()",
+              "    _h_out, _prev = _hooks[\"output_transform\"], getattr(net, \"_output_transform\", None)",
+              "    # the Python code's output_transform, after a scale/shift output transform when there is one",
+              "    net.apply_output_transform((lambda x, y: _h_out(x, y)) if _prev is None",
+              "                               else (lambda x, y: _h_out(x, _prev(x, y))))"]
     L.append("    return net")
-    return "\n".join(L)
+    out = "\n".join(L)
+    if "feature_transform" in hk or "output_transform" in hk:
+        out = _pde_hooks_loader_code(cfg) + "\n\n" + out
+    return out
 
 
 def _transform_config_literal(config):
@@ -5453,7 +5509,7 @@ def _dry_run_code():
     """_dry_run(model, data, net) in the Solve script: with PINNSTUDIO_DRY_RUN set (the Python code page's
     Check, and the tests) the script evaluates the equations on 64 training points and the initial loss of
     every term, prints one JSON line (pde_code.parse_dry_run reads it) and stops, training nothing."""
-    return 'def _dry_run(model, data, net):\n    # PINNSTUDIO_DRY_RUN (the Python code page\'s Check, and the tests): the equations on 64 training points,\n    # the initial loss of every term, then stop -- one JSON line, nothing trained or saved\n    import json as _dr_json\n    import traceback as _dr_tb\n    try:\n        if "_frac_apply" in globals():\n            _dr_r = []          # fractional: the residual needs the training points\' matrix; the losses show it\n        else:\n            _dr_x = torch.as_tensor(np.asarray(data.train_x[:64])).requires_grad_(True)\n            dde.grad.clear()\n            _dr_r = pde(_dr_x, net(_dr_x))\n            _dr_r = _dr_r if isinstance(_dr_r, (list, tuple)) else [_dr_r]\n        model.train(iterations=0, display_every=1, verbose=0)\n        _dr_l = [float(_v) for _v in np.ravel(model.losshistory.loss_train[-1])]\n        _dr_names = (_py_cond.names() if _PY_CONDITIONS\n                     else [f"row {_i + 1}" for _i in range(len(_constraints))])\n        print("PINNSTUDIO_DRY_RUN " + _dr_json.dumps({"ok": True, "residuals": [list(_r.shape) for _r in _dr_r],\n                                                      "conditions": _dr_names, "losses": _dr_l}), flush=True)\n    except BaseException as _dr_e:\n        _dr_line = 0\n        for _fr in _dr_tb.extract_tb(_dr_e.__traceback__):\n            if _fr.filename == "<equations>":\n                _dr_line = _fr.lineno\n        print("PINNSTUDIO_DRY_RUN " + _dr_json.dumps({"ok": False, "error": f"{type(_dr_e).__name__}: {_dr_e}",\n                                                      "line": _dr_line}), flush=True)\n    raise SystemExit(0)\n'
+    return 'def _dry_run(model, data, net):\n    # PINNSTUDIO_DRY_RUN (the Python code page\'s Check, and the tests): the equations on 64 training points,\n    # the initial loss of every term, then stop -- one JSON line, nothing trained or saved\n    import json as _dr_json\n    import traceback as _dr_tb\n    try:\n        if "_frac_apply" in globals():\n            _dr_r = []          # fractional: the residual needs the training points\' matrix; the losses show it\n        else:\n            _dr_x = torch.as_tensor(np.asarray(data.train_x[:64])).requires_grad_(True)\n            dde.grad.clear()\n            _dr_r = pde(_dr_x, net(_dr_x))\n            _dr_r = _dr_r if isinstance(_dr_r, (list, tuple)) else [_dr_r]\n        model.train(iterations=0, display_every=1, verbose=0)\n        _dr_l = [float(_v) for _v in np.ravel(model.losshistory.loss_train[-1])]\n        _dr_names = (_py_cond.names() if _PY_CONDITIONS\n                     else [f"row {_i + 1}" for _i in range(len(_constraints))])\n        print("PINNSTUDIO_DRY_RUN " + _dr_json.dumps({"ok": True, "residuals": [list(_r.shape) for _r in _dr_r],\n                                                      "conditions": _dr_names, "losses": _dr_l,\n                                                      "hooks": [_h for _h in ("output_transform", "feature_transform", "points", "callbacks") if _h in globals().get("_PDE_NS", {})]}), flush=True)\n    except BaseException as _dr_e:\n        _dr_line = 0\n        for _fr in _dr_tb.extract_tb(_dr_e.__traceback__):\n            if _fr.filename == "<equations>":\n                _dr_line = _fr.lineno\n        print("PINNSTUDIO_DRY_RUN " + _dr_json.dumps({"ok": False, "error": f"{type(_dr_e).__name__}: {_dr_e}",\n                                                      "line": _dr_line}), flush=True)\n    raise SystemExit(0)\n'
 
 
 def _gs_loss_weights_code(config):
@@ -5597,7 +5653,7 @@ print(f"Loss weights: {{_multi_weights}} ({{len(_multi_weights)}} terms for {{le
 
 
 def generate_script(config):
-    _py_any = _python_pde(config) or _python_conditions(config)
+    _py_any = _python_pde(config) or _python_conditions(config) or bool(_python_hooks(config))
     _pde_consts = _pde_constant_dict(config) if _py_any else {}
     config = _effective_config(config)
     if _py_any:
@@ -5933,7 +5989,7 @@ if _dxde_ver is not None and _dxde_ver < (1, 13, 0):
     # network-construction site in place of a bare dde.nn.FNN(...).
     net_helper_code = _net_construction_helper_code(config.network_type, config.msffn_sigmas, config.msffn_sigmas_t,
                                                     getattr(config, "network_design", ""),
-                                                    _designed_io(config))
+                                                    _designed_io(config), cfg=config)
 
     # Training Monitors' shared, static derivative-building/expression-
     # evaluation helpers -- see _training_monitor_runtime_code()'s own
@@ -6220,7 +6276,8 @@ if _use_save:
         "pde_expressions": {repr(config.pde_expressions)},
         "pde_mode": {repr(getattr(config, "pde_mode", "expressions"))},
         "conditions_mode": {repr(getattr(config, "conditions_mode", "rows"))},
-        "python_code": {repr(getattr(config, "python_code", "") if (_python_pde(config) or _python_conditions(config)) else "")},
+        "python_code": {repr(getattr(config, "python_code", "") if (_python_pde(config) or _python_conditions(config) or _python_hooks(config)) else "")},
+        "python_constants": {(_pde_consts if _python_hooks(config) else {})!r},
         "optimizer": {repr(config.optimizer)},
         "optimizer2": {repr(config.optimizer2)},
         "loss_type": {repr(config.loss_type)},
@@ -12118,6 +12175,10 @@ def generate_clean_script(config):
     # Time windows with backward compatibility (bc-PINN), a growing time range, initial-condition guided
     # learning or resampling in each window: these are written only by generate_script() so far, so the
     # export is that script (standalone too), and it trains exactly the model Solve trains.
+    if _python_hooks(config) and not _python_conditions(config):
+        return ("# Exported from PINNStudio. This problem's Python code defines " + ", ".join(_python_hooks(config))
+                + ",\n# so the export is the full script PINNStudio's Solve runs (it trains exactly the same model).\n"
+                + generate_script(config))
     if _python_conditions(config):
         # conditions(c) runs on the rows' own helpers in the Solve script, so the export is that script
         return ("# Exported from PINNStudio. This problem's boundary and initial conditions are written in Python\n"
@@ -12344,7 +12405,7 @@ def generate_clean_script(config):
     # as a plain float; _make_net silently drops it for PFNN).
     net_helper_code = _net_construction_helper_code(config.network_type, config.msffn_sigmas, config.msffn_sigmas_t,
                                                     getattr(config, "network_design", ""),
-                                                    _designed_io(config))
+                                                    _designed_io(config), cfg=config)
 
     # ---- Plot Settings: figure-size standardization -----------
     # Same shared-helper pattern as net_helper_code just above -- see

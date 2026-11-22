@@ -926,6 +926,28 @@ class PINNConfig:
             return [msg if msg.startswith("Network design") else f"Network design: {msg}"]
         return []
 
+    def _hook_errors(self, hooks) -> list:
+        """Settings the Python code's hooks cannot be combined with."""
+        out = []
+        if "output_transform" in hooks:
+            if self.output_transform_enabled and self.output_transform_mode == "formula":
+                out.append("The Python code's output_transform and the output transform formula (Neural network "
+                           "page) both change the outputs: keep one (a scale/shift transform is fine).")
+            if any(h.strip() == "True" for h in (self.ic_hard or "").split(",")):
+                out.append("The Python code's output_transform and Exact initial conditions both change the "
+                           "outputs: turn Exact off (Write from the page › Exact initial conditions writes it as code).")
+        if "feature_transform" in hooks:
+            if self.input_transform_enabled or self.periodic_inputs:
+                out.append("The Python code's feature_transform and the input transform (Neural network page) both "
+                           "change the inputs: keep one.")
+            if self.network_type == "Designed":
+                out.append("A designed network takes its inputs from its own blocks: the Python code's "
+                           "feature_transform cannot be used with it (use a Fourier or periodic features block).")
+        if "points" in hooks and "frac(" in (self.pde_expressions or "") and self.pde_mode != "python":
+            out.append("The Python code's points(geom, n) cannot be used with frac(...) equations (DeepXDE's "
+                       "fractional data keeps its own points).")
+        return out
+
     def validate(self):
         if self.conditions_mode == "python" and not self.__dict__.get("_rows_inert"):
             # The conditions come from conditions(c): the rows are kept but not used, so nothing in them may
@@ -1174,10 +1196,12 @@ class PINNConfig:
             errors.append(f"Equations as: {self.pde_mode!r} is not a choice (expressions or python).")
         if self.conditions_mode not in ("rows", "python"):
             errors.append(f"Conditions as: {self.conditions_mode!r} is not a choice (rows or python).")
-        if _python_pde or _python_cond:
-            from pinnstudio.core import pde_code as _pde_code_mod
+        from pinnstudio.core import pde_code as _pde_code_mod
+        _hooks = _pde_code_mod.hooks(self.python_code or "")
+        if _python_pde or _python_cond or _hooks:
             errors.extend(_pde_code_mod.check_source(
                 self.python_code or "", needs=(("pde",) if _python_pde else ()) + (("conditions",) if _python_cond else ())))
+        errors.extend(self._hook_errors(_hooks))
         if _python_cond:
             if any(h.strip() == "True" for h in (self.ic_hard or "").split(",")):
                 errors.append("Exact initial conditions are built from the Initial conditions rows: with the "

@@ -6,7 +6,8 @@ for what the expression boxes and the rows cannot say:
   and mix of derivatives, piecewise coefficients or PyTorch helpers;
 - boundary and initial conditions of any kind, including any condition DeepXDE has.
 
-The module can define two functions:
+The module can define two main functions, and the [hooks](#hooks-exact-conditions-features-points-and-callbacks)
+further down:
 
 ```python
 def pde(x, y, d):
@@ -27,7 +28,8 @@ Two choices say what the code is used for:
 - **Conditions as:** on the [Boundary conditions](boundary-conditions.md) and
   [Initial conditions](initial-conditions.md) pages (one choice for both), **Rows** or **Python code**.
 
-Each can be Python on its own; the other stays as it is. Choosing **Python code** when the module has no
+Each can be Python on its own; the other stays as it is. A hook is used whenever the module defines it, with
+either choice. The line **In use:** under the editor lists what of the module the problem uses. Choosing **Python code** when the module has no
 `pde()` (or no `conditions()`) writes one from the page, so you start from exactly what the page had. The
 expressions and rows are kept, and choosing them again brings them back.
 
@@ -76,6 +78,7 @@ the equations stay on the [Loss weights](loss-weights.md) page.
 | `c.initial(out, value)` | the initial condition: a function of the points `x`, a text or a number |
 | `c.initial_points(file)` | the initial condition from a points file |
 | `c.row({...})` | a Boundary Conditions row, as the problem file stores it |
+| `c.loss(fn, points="domain", n=1000)` | a loss term of your own, on `n` random points of the domain or the boundary, or on an array of points |
 | `c.add(condition, kind="bc")` | any DeepXDE condition you build; `c.geom` is the domain |
 
 `where` is a text written as in the rows (`"left"`, `"x <= x_min"`, `"on_boundary and y > 0.5"`), or a function
@@ -87,14 +90,57 @@ With time-adaptive training, `conditions()` runs for every time window, with `c.
 The first window takes the code's initial conditions; later windows hold each output to the previous
 window's solution, as with the rows.
 
-Exact initial conditions (Initial conditions page) are built from the rows' formulas, so they need
-**Conditions as: Rows**. With conditions in Python, **Export script** writes the full script Solve runs.
+`c.loss(fn, ...)` calls `fn(x, y, d)` with the whole training batch, as `pde()` gets it, and `d.rows` is the
+slice of the term's own points. `fn` returns a column for every point, and the term keeps its own rows. It can
+also return a single number, which is then the residual at each of the term's points. For example, the mean of
+`u` over the domain equal to 0.5:
+
+```python
+c.loss(lambda x, y, d: torch.mean(y[d.rows, 0:1]) - 0.5, n=2000, name="mean of u")
+```
+
+Exact initial conditions on the Initial conditions page are built from the rows' formulas, so they need
+**Conditions as: Rows**. In Python, write them as an `output_transform` (below). With conditions in Python,
+**Export script** writes the full script Solve runs.
+
+## Hooks: exact conditions, features, points and callbacks
+
+The module may also define these functions. Each is used when it is there.
+
+| Function | What it does |
+|---|---|
+| `output_transform(x, y)` | Changes the network's outputs (DeepXDE's `apply_output_transform`): exact boundary and initial conditions. `x` holds the inputs as columns, `y` the raw outputs. It returns one column per output. |
+| `feature_transform(x)` | The network's input features (`apply_feature_transform`), any number of columns. The first layer is sized to fit. |
+| `points(geom, n)` | The equations' `n` collocation points, as an `(n, dim)` array. `geom` is DeepXDE's geometry; in a time window it is that window's. Resampling asks again. |
+| `callbacks()` | A list of DeepXDE callbacks for training. It is called once per training phase, so each phase gets new ones. |
+
+**Write from the page › Exact initial conditions** writes an `output_transform` from the Initial conditions
+page's expressions. It is the same form the page's **Exact** uses:
+\( u = \mathrm{IC}(x) + \frac{t - t_0}{t_1 - t_0}\,\hat u \). **Write from the page › A hook to fill in**
+adds a commented start for each hook.
+
+```python
+def output_transform(x, y):
+    # u = 0 at x = 0 and x = 1, whatever the network gives
+    return x[:, 0:1] * (1 - x[:, 0:1]) * y
+```
+
+Some settings change the same thing as a hook, and Solve refuses those combinations with a message:
+- `output_transform` with the Neural network page's output **formula** (a scale/shift transform is fine: the
+  hook gets the scaled outputs), or with **Exact** initial conditions;
+- `feature_transform` with the Neural network page's input transform, exact periodicity, or a designed
+  network (use a Fourier or periodic features block there).
+
+When the module defines a hook, **Export script** writes the full script Solve runs. Restore & Visualize runs
+the module again from the run's `model_config.json`, so a restored network has the same transforms.
 
 ## Check
 
 **Check** runs the Solve script once, in a second process, without training. It evaluates the equations on a
-few training points, builds every condition, and reports the residuals, the conditions and the initial loss
-of each term. An error shows its line, marked in the editor.
+few training points, builds every condition, and reports the residuals, the conditions, the initial loss
+of each term and the hooks used. An error shows its line, marked in the editor. It uses at most 2,000 domain
+points and 500 boundary and initial points, and the Python kept ready for runs when there is one
+(**Settings › Keep Python Ready for Runs**).
 
 ## Files and your own editor
 

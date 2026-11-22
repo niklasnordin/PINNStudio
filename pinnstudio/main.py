@@ -165,7 +165,8 @@ def cmd_run(args):
                 print(f"• {it['name']} ({it['kind']}, SHA-256 {it['sha256'][:16]}…) {it['problem']}", file=sys.stderr)
             print("Trust them in the window, or pass --trust-code for this run.", file=sys.stderr)
             return 1
-    if (config.pde_mode == "python" or config.conditions_mode == "python") and (config.python_code or "").strip():
+    from pinnstudio.core import pde_code as _pc
+    if _pc.uses_module(config) and (config.python_code or "").strip():
         from pinnstudio.core.netdesign import trust as T
         item = T.code_item(config.python_code)
         if not T.is_trusted(item) and not args.trust_code:

@@ -18371,7 +18371,8 @@ print("RESTORE_DONE")
         net_helper_code = _net_construction_helper_code(cfg.get("network_type", "FNN"), cfg.get("msffn_sigmas", "1, 10"),
                                                         cfg.get("msffn_sigmas_t", "1, 10"),
                                                         cfg.get("network_design", ""),
-                                                        (cfg.get("network_inputs") or [], cfg.get("network_outputs") or []))
+                                                        (cfg.get("network_inputs") or [], cfg.get("network_outputs") or []),
+                                                        cfg=cfg)
         # Re-attach the model's input/output transforms -- see
         # codegen._net_transforms_code; a model_config.json from before
         # this round has no transform keys and gets none, as before.
@@ -18838,7 +18839,8 @@ def _extract_plot_field(x_grid):
         net_helper_code = _net_construction_helper_code(cfg.get("network_type", "FNN"), cfg.get("msffn_sigmas", "1, 10"),
                                                         cfg.get("msffn_sigmas_t", "1, 10"),
                                                         cfg.get("network_design", ""),
-                                                        (cfg.get("network_inputs") or [], cfg.get("network_outputs") or []))
+                                                        (cfg.get("network_inputs") or [], cfg.get("network_outputs") or []),
+                                                        cfg=cfg)
         # Re-attach the model's input/output transforms -- see
         # codegen._net_transforms_code; a model_config.json from before
         # this round has no transform keys and gets none, as before.

@@ -48,7 +48,9 @@ class PythonCodeState(QObject):
         return dict(self._result)
 
     def uses_code(self) -> bool:
-        return self._pde_mode == "python" or self._conditions_mode == "python"
+        """The Solve script runs the code: a mode is Python, or the code defines a hook (pde_code.HOOKS)."""
+        from pinnstudio.core import pde_code as _pc
+        return self._pde_mode == "python" or self._conditions_mode == "python" or bool(_pc.hooks(self._code))
 
     # ── mutators (controllers only) ────────────────────────────────
     def put_code(self, code: str, from_outside: bool | None = None):
