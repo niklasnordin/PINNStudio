@@ -181,7 +181,7 @@ class PINNConfig:
     #                              in the coordinates and the raw network
     #                              outputs by name (a hard constraint, e.g.
     #                              "x*(1-x)*y*(1-y)*u"); blank = unchanged.
-    input_transform_mode: str = "scale"
+    input_transform_mode: str = "scale"     # "scale", "formula", or "domain": each input to [-1, 1] from the domain
     input_feature_formula: str = ""
     output_transform_mode: str = "scale"
     output_transform_formula: str = ""

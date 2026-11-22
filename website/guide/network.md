@@ -61,6 +61,9 @@ Tick **Enable input transform** and choose a **Mode:**
   `x_raw × scale + shift`. Scale 1 and shift 0 change nothing.
 - **Formula** — the network's input features, separated by `;`, written in `x, y, z, t`, for example
   `x*sin(y); x*cos(y)`. The first layer then takes one input per feature.
+- **Scale to [−1, 1] from the domain** — each input is mapped to [−1, 1] from the domain's limits
+  (`x_min` … `x_max`, …, `t_min` … `t_max`), and follows them when the domain changes. See
+  [Scale the problem](#scale-the-problem).
 
 **Exact periodicity** on the Boundary conditions page builds its own periodic input features; the input
 transform must then stay off (the page says so).
@@ -70,9 +73,25 @@ transform must then stay off (the page says so).
 Tick **Enable output transform** and choose a **Mode:**
 
 - **Scale/shift** — one row per output (`Output 1:`, …): `y_raw × scale + shift`, useful when an output
-  is much larger or smaller than 1.
+  is much larger or smaller than 1. **Suggest output scales** fills the rows (see below).
 - **Formula** — one formula per output (`Output 1 =` …) in the coordinates and the raw network output by
   name. Blank leaves that output unchanged.
+
+### Scale the problem
+
+A network trains best on inputs and outputs of order one. A domain of 0 to 1000 m, or a temperature
+near 300 K, makes training slow or keeps it from converging. Two settings take care of the network's side:
+- **Input transform › Scale to [−1, 1] from the domain** maps every input to [−1, 1].
+- **Output transform › Scale/shift › Suggest output scales** sets each output's scale to half the range of its
+  values and the shift to their middle. The values come from the reference solution's formula (Error analysis)
+  when there is one, otherwise from the initial conditions and the Dirichlet boundary values. The note under
+  the button says where each came from. With nothing to go by, an output keeps 1 and 0.
+
+The equations stay in the problem's own units. The derivatives are taken through the transforms, so nothing
+in them needs rewriting. The loss terms can still differ by orders of magnitude: then use
+**Scale by initial losses** or **Balance the terms during training** on the
+[Loss weights](loss-weights.md) page. The theory, and how to write a problem in nondimensional form, is in
+[Scaling and nondimensional form](../theory/nondimensionalisation.md).
 
 ### Impose conditions exactly with an output formula
 
@@ -95,7 +114,7 @@ your own formula. The page shows a note while that is the case.
 | **Fourier scales (σ):** | MsFFN/STMsFFN feature scales | `1, 10` | | `msffn_sigmas` |
 | **Time scales (σₜ):** | STMsFFN time-feature scales | `1, 10` | | `msffn_sigmas_t` |
 | **Enable input transform** | Transform the inputs | off | | `input_transform_enabled` |
-| **Mode:** (input) | Scale/shift or Formula | Scale/shift | | `input_transform_mode` (`scale`, `formula`) |
+| **Mode:** (input) | Scale/shift, Formula, or Scale to [−1, 1] from the domain | Scale/shift | | `input_transform_mode` (`scale`, `formula`, `domain`) |
 | × … + … (per input) | Scale and shift | 1, 0 | | `input_transform_scale`, `input_transform_shift` |
 | (input formula) | Input features, `;`-separated | blank | | `input_feature_formula` |
 | **Enable output transform** | Transform the outputs | off | | `output_transform_enabled` |

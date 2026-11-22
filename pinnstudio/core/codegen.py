@@ -4870,7 +4870,16 @@ def _net_transforms_code(cfg, fn_name="_apply_net_transforms"):
         return [f"        {n} = {src}[:, {c}:{c + 1}]"
                 for n, c in _pde_coord_columns(_pde_coord_names(exprs), is_2d, is_3d, is_steady)]
 
-    if _input_formula_on(cfg):
+    if in_on and _cfg_get(cfg, "input_transform_mode", "scale") == "domain":
+        sc, sh = _domain_input_scaling(cfg)
+        L += [f"    in_scale = {sc}   # each input to [-1, 1] from the domain's limits",
+              f"    in_shift = {sh}",
+              "    def _input_transform(x):",
+              "        sc = torch.tensor(in_scale, dtype=x.dtype, device=x.device)",
+              "        sh = torch.tensor(in_shift, dtype=x.dtype, device=x.device)",
+              "        return x * sc + sh",
+              "    net.apply_feature_transform(_input_transform)"]
+    elif _input_formula_on(cfg):
         feats = [_simplify_pde_expr(f) for f in _feature_formula_list(cfg)]
         L += ["    def _input_transform(X):"] + _coord_lines(feats, "X")
         L.append("        return torch.cat([" + ", ".join(feats) + "], dim=1)")
@@ -4919,6 +4928,25 @@ def _net_transforms_code(cfg, fn_name="_apply_net_transforms"):
     return out
 
 
+def _domain_input_scaling(cfg):
+    """(scale, shift) per input column that map the domain's limits to [-1, 1]: x, then y and z, then t (not for
+    a steady problem). A column whose limits are equal is left as it is."""
+    dim = _cfg_get(cfg, "problem_dim", "1D")
+    axes = ["x"] + (["y"] if dim in ("2D", "3D") else []) + (["z"] if dim == "3D" else [])
+    if not _cfg_get(cfg, "steady_state", False):
+        axes.append("t")
+    sc, sh = [], []
+    for a in axes:
+        lo, hi = float(_cfg_get(cfg, f"{a}_min", 0.0) or 0.0), float(_cfg_get(cfg, f"{a}_max", 1.0) or 0.0)
+        if hi - lo > 0:
+            sc.append(2.0 / (hi - lo))
+            sh.append(-(hi + lo) / (hi - lo))
+        else:
+            sc.append(1.0)
+            sh.append(0.0)
+    return sc, sh
+
+
 def _transform_config_literal(config):
     """The transform settings as model_config.json entries (a string of
     `"key": value,` pairs to splice into the dict literal the generated
@@ -4928,7 +4956,12 @@ def _transform_config_literal(config):
             "input_transform_shift", "input_feature_formula",
             "output_transform_enabled", "output_transform_mode", "output_transform_scale",
             "output_transform_shift", "output_transform_formula")
-    return " ".join(f"{k!r}: {getattr(config, k)!r}," for k in keys)
+    vals = {k: getattr(config, k) for k in keys}
+    if vals["input_transform_enabled"] and vals["input_transform_mode"] == "domain":
+        # a restore script has no domain limits: it gets the scale and shift they gave
+        vals["input_transform_scale"], vals["input_transform_shift"] = _domain_input_scaling(config)
+        vals["input_transform_mode"] = "scale"
+    return " ".join(f"{k!r}: {v!r}," for k, v in vals.items())
 
 
 def _constant_values(config):
@@ -12444,7 +12477,7 @@ def generate_clean_script(config):
     figsize_helper_code = _clean_figsize_runtime_code(config) + "\n\n" + _contour_levels_helper_code()
 
     # ---- Optional input/output transforms --------------------------------
-    has_in_transform = bool(config.input_transform_enabled and config.input_transform_scale) or _input_formula_on(config)
+    has_in_transform = bool(config.input_transform_enabled and (config.input_transform_scale or config.input_transform_mode == "domain")) or _input_formula_on(config)
     has_out_transform = bool(config.output_transform_enabled and config.output_transform_scale) or _output_formula_on(config)
     needs_transform_helper = has_in_transform or has_out_transform
 

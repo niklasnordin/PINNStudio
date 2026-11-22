@@ -2411,6 +2411,18 @@ class MainWindow(QMainWindow):
         H = max(self.right_splitter.height(), 400)
         self.right_splitter.setSizes([int(0.7 * H), H - int(0.7 * H)])
 
+    def _suggest_output_scales(self):
+        """Neural network page: put the suggested output scales into the output transform's rows."""
+        if not hasattr(self, "scaling_ctl"):
+            from pinnstudio.ui.controllers.scaling import ScalingController
+            self.scaling_ctl = ScalingController(self._build_config, self)
+        s = self.scaling_ctl.suggest_outputs()
+        for r, sc, sh in zip(self.output_transform_rows, s["scale"], s["shift"]):
+            r["scale"].setValue(sc)
+            r["shift"].setValue(sh)
+        self.suggest_scales_note.setText(s["text"])
+        self.suggest_scales_note.setVisible(True)
+
     def _build_loss_balancing(self):
         """Loss weights page: automatic balancing of the loss terms during training (config.loss_balancing)."""
         box = QWidget()
@@ -3475,6 +3487,17 @@ class MainWindow(QMainWindow):
         # Mode: "Scale/shift" rows, or a formula giving the
         # network's input features (DeepXDE's apply_feature_transform).
         self.input_transform_mode_combo, in_scale_w, in_formula_w = self._transform_mode_widgets(it_layout)
+        # each input to [-1, 1] from the domain's limits (codegen._domain_input_scaling): it follows the domain
+        self.input_transform_mode_combo.addItem("Scale to [−1, 1] from the domain", "domain")
+        self.input_domain_hint = QLabel("Each input (x, y, z, t) is mapped to [−1, 1] from the domain's limits, "
+                                        "and follows them when the domain changes. The equations stay in the "
+                                        "problem's units: the derivatives go through the transform.")
+        self.input_domain_hint.setWordWrap(True)
+        self._register_hint(self.input_domain_hint, '#586e75')
+        self.input_domain_hint.setVisible(False)
+        it_layout.addWidget(self.input_domain_hint)
+        self.input_transform_mode_combo.currentIndexChanged.connect(
+            lambda _i: self.input_domain_hint.setVisible(self.input_transform_mode_combo.currentData() == "domain"))
         it_scale_layout = QVBoxLayout(in_scale_w)
         it_scale_layout.setSpacing(3); it_scale_layout.setContentsMargins(0, 0, 0, 0)
         it_hint = QLabel("x_transformed = x_raw × scale + shift")
@@ -3522,6 +3545,21 @@ class MainWindow(QMainWindow):
         ot_hint = QLabel("y_transformed = y_raw × scale + shift")
         self._register_hint(ot_hint, '#586e75')
         ot_scale_layout.addWidget(ot_hint)
+        _sug_row = QHBoxLayout()
+        self.suggest_scales_btn = QPushButton("Suggest output scales")
+        self.suggest_scales_btn.setToolTip(
+            "Sets each output's scale and shift from the size of its values, so the network trains on values\n"
+            "of order one: from the reference solution's formula (Error analysis) when there is one, otherwise\n"
+            "from the initial conditions and the Dirichlet boundary values.")
+        self.suggest_scales_btn.clicked.connect(self._suggest_output_scales)
+        _sug_row.addWidget(self.suggest_scales_btn)
+        _sug_row.addStretch()
+        ot_scale_layout.addLayout(_sug_row)
+        self.suggest_scales_note = QLabel("")
+        self.suggest_scales_note.setWordWrap(True)
+        self._register_hint(self.suggest_scales_note, '#74c0fc')
+        self.suggest_scales_note.setVisible(False)
+        ot_scale_layout.addWidget(self.suggest_scales_note)
         self.output_transform_rows_layout = QVBoxLayout()
         self.output_transform_rows_layout.setSpacing(3)
         ot_scale_layout.addLayout(self.output_transform_rows_layout)
@@ -6265,9 +6303,9 @@ class MainWindow(QMainWindow):
         formula_w.setVisible(False)
 
         def _on_mode(_i):
-            is_formula = combo.currentData() == "formula"
-            scale_w.setVisible(not is_formula)
-            formula_w.setVisible(is_formula)
+            mode = combo.currentData()
+            scale_w.setVisible(mode == "scale")
+            formula_w.setVisible(mode == "formula")
         combo.currentIndexChanged.connect(_on_mode)
         return combo, scale_w, formula_w
 
