@@ -74,6 +74,24 @@ For comparison, an RTX 4090 ran the same 2D problems at 139 to 162 iterations a 
 
 The Windows measurements (a laptop with a Core i9-8950HK and an RTX 2080 Max-Q: start-up time, Windows Defender, power mode, when the GPU pays off) are in [`platform/windows_speed.md`](platform/windows_speed.md).
 
+## Waiting: the window's start, Check and Solve
+
+*Measured on 2026-11-22* on a laptop with an Intel Core i7-11850H (8 cores, 16 threads), 16 GB, under WSL2 (Ubuntu): Python 3.12.13, PyTorch 2.15.0 (CPU), DeepXDE 1.15.1, PySide6 6.12.0, with [`tools/profile_speed.py`](../tools/profile_speed.py) `--repeat 3` (median seconds, off screen, the example *Burgers equation (Python code)* on the CPU):
+
+| What | Seconds |
+|---|---:|
+| Window start, no cached equation images | 7.05 |
+| Window start, equation images cached | 1.81 |
+| Check, new Python, all points | 3.73 |
+| Check, new Python, at most 2,000 domain points | 3.60 |
+| Check, Python kept ready, at most 2,000 domain points | 1.46 |
+| Solve to the first training line, new Python | 3.61 |
+| Solve to the first training line, Python kept ready | 1.52 |
+
+- **Starting the window.** The equation previews are drawn with matplotlib, so the first start renders every one. The images are now cached under `~/.pinnstudio/cache/equations/`, and later starts take a quarter of the time.
+- **Check and Solve.** Most of their wait is a new Python importing PyTorch and DeepXDE. With *Settings › Keep Python Ready for Runs* (on by default) a spare Python with those already imported waits for the next run, which saves about 2 s here. Windows, where the imports take 7 to 9 s ([`platform/windows_speed.md`](platform/windows_speed.md)), saves more.
+- **Fewer points in a Check.** Capping a Check at 2,000 domain points and 500 boundary and initial points saves little on this example, which has few points. It matters for problems with tens of thousands.
+
 ## Export check: the exported script trains the same model
 
 PINNStudio writes two scripts from one configuration: the one *Solve* runs, and the one *Export as DeepXDE script* saves. For every example (forward, and inverse where it has one) the check loads its *Tuned* settings, shortens the training (every Adam phase to 200 steps, every L-BFGS phase to 50), writes both scripts, runs them on the CPU with the same seed, and compares the printed loss history line by line and, for inverse problems, the identified parameters.

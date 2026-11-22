@@ -66,7 +66,8 @@ jobs:
   accuracy:
     # Every example with a reference solution, trained with Adam capped at 1500 iterations (L-BFGS 750) and a
     # fixed seed; the L2 errors against benchmarks/accuracy_baseline.json go to the job summary. It only
-    # reports (tools/accuracy_report.py always exits 0); the results are kept as an artifact.
+    # reports (tools/accuracy_report.py always exits 0); the results are kept as an artifact. Beltrami flow and
+    # the 3D fractional Poisson equation are left out: capped, they still take more than the 20-minute limit.
     runs-on: ubuntu-latest
     timeout-minutes: 240
     env:
@@ -87,7 +88,8 @@ jobs:
         continue-on-error: true
         run: |
           python tools/run_deepxde_examples.py --with-reference --cap 1500 --timeout 1200 \
-            --set train_device=cpu --json accuracy.json --out accuracy-runs
+            --skip "Beltrami flow|Fractional Poisson equation 3D" --set train_device=cpu \
+            --json accuracy.json --out accuracy-runs
       - name: Accuracy against the baseline
         if: always()
         run: python tools/accuracy_report.py accuracy.json --out "$GITHUB_STEP_SUMMARY"

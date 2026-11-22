@@ -1,0 +1,669 @@
+{
+ "cap": 1500,
+ "smoke": false,
+ "python": "3.12.13",
+ "torch": "2.15.0+cpu",
+ "platform": "Linux-6.18.58.1-microsoft-standard-WSL2-x86_64-with-glibc2.35",
+ "examples": [
+  {
+   "name": "ODE system",
+   "ok": true,
+   "seconds": 7.7,
+   "l2": 0.773575,
+   "l2_values": [
+    0.76071,
+    0.78644
+   ],
+   "final_loss": 0.01527,
+   "iterations": 1500,
+   "lbfgs_iterations": 0,
+   "error": ""
+  },
+  {
+   "name": "Lotka-Volterra equation",
+   "ok": true,
+   "seconds": 96.4,
+   "l2": 0.51179,
+   "l2_values": [
+    0.55035,
+    0.47323
+   ],
+   "final_loss": 0.093979,
+   "iterations": 1500,
+   "lbfgs_iterations": 750,
+   "error": ""
+  },
+  {
+   "name": "Second-order ODE",
+   "ok": true,
+   "seconds": 8.5,
+   "l2": 0.0081923,
+   "l2_values": [
+    0.0081923
+   ],
+   "final_loss": 0.0056657,
+   "iterations": 1500,
+   "lbfgs_iterations": 0,
+   "error": ""
+  },
+  {
+   "name": "Integro-differential equation",
+   "ok": true,
+   "seconds": 7.7,
+   "l2": 0.00050247,
+   "l2_values": [
+    0.00050247
+   ],
+   "final_loss": 6.4708e-05,
+   "iterations": 1500,
+   "lbfgs_iterations": 0,
+   "error": ""
+  },
+  {
+   "name": "Volterra integro-differential equation",
+   "ok": true,
+   "seconds": 5.0,
+   "l2": 0.0015049,
+   "l2_values": [
+    0.0015049
+   ],
+   "final_loss": 1.4756e-07,
+   "iterations": 0,
+   "lbfgs_iterations": 750,
+   "error": ""
+  },
+  {
+   "name": "Fractional Poisson equation 1D",
+   "ok": true,
+   "seconds": 7.1,
+   "l2": 0.058844,
+   "l2_values": [
+    0.058844
+   ],
+   "final_loss": 0.00010162,
+   "iterations": 1500,
+   "lbfgs_iterations": 0,
+   "error": ""
+  },
+  {
+   "name": "Fractional Poisson equation 2D",
+   "ok": true,
+   "seconds": 64.5,
+   "l2": 0.007891,
+   "l2_values": [
+    0.007891
+   ],
+   "final_loss": 0.0028058,
+   "iterations": 1500,
+   "lbfgs_iterations": 0,
+   "error": ""
+  },
+  {
+   "name": "Fractional diffusion equation",
+   "ok": true,
+   "seconds": 9.7,
+   "l2": 0.021511380146,
+   "l2_values": [
+    1.0073e-07,
+    0.0078828,
+    0.019769,
+    0.039,
+    0.040905
+   ],
+   "final_loss": 0.00017354,
+   "iterations": 1500,
+   "lbfgs_iterations": 0,
+   "error": ""
+  },
+  {
+   "name": "Poisson 1D \u2013 Dirichlet",
+   "ok": true,
+   "seconds": 6.5,
+   "l2": 0.00025792,
+   "l2_values": [
+    0.00025792
+   ],
+   "final_loss": 0.00010767,
+   "iterations": 1500,
+   "lbfgs_iterations": 0,
+   "error": ""
+  },
+  {
+   "name": "Poisson 1D \u2013 Dirichlet/Neumann",
+   "ok": true,
+   "seconds": 6.8,
+   "l2": 0.0015596,
+   "l2_values": [
+    0.0015596
+   ],
+   "final_loss": 0.00032859,
+   "iterations": 1500,
+   "lbfgs_iterations": 0,
+   "error": ""
+  },
+  {
+   "name": "Poisson 1D \u2013 Dirichlet/Robin",
+   "ok": true,
+   "seconds": 6.9,
+   "l2": 0.00032582,
+   "l2_values": [
+    0.00032582
+   ],
+   "final_loss": 2.6227e-05,
+   "iterations": 1500,
+   "lbfgs_iterations": 0,
+   "error": ""
+  },
+  {
+   "name": "Poisson 1D \u2013 Dirichlet/Periodic",
+   "ok": true,
+   "seconds": 6.7,
+   "l2": 0.0055902,
+   "l2_values": [
+    0.0055902
+   ],
+   "final_loss": 0.00059145,
+   "iterations": 1500,
+   "lbfgs_iterations": 0,
+   "error": ""
+  },
+  {
+   "name": "Poisson 1D \u2013 Dirichlet/PointSetOperator",
+   "ok": true,
+   "seconds": 6.7,
+   "l2": 0.0015596,
+   "l2_values": [
+    0.0015596
+   ],
+   "final_loss": 0.00032859,
+   "iterations": 1500,
+   "lbfgs_iterations": 0,
+   "error": ""
+  },
+  {
+   "name": "Poisson 1D \u2013 hard boundary conditions",
+   "ok": true,
+   "seconds": 7.2,
+   "l2": 0.072277,
+   "l2_values": [
+    0.072277
+   ],
+   "final_loss": 21.959,
+   "iterations": 1500,
+   "lbfgs_iterations": 0,
+   "error": ""
+  },
+  {
+   "name": "Poisson 1D \u2013 multi-scale Fourier features",
+   "ok": true,
+   "seconds": 29.4,
+   "l2": 0.12956,
+   "l2_values": [
+    0.12956
+   ],
+   "final_loss": 63.583,
+   "iterations": 1500,
+   "lbfgs_iterations": 0,
+   "error": ""
+  },
+  {
+   "name": "Wave propagation \u2013 space-time multi-scale Fourier features",
+   "ok": true,
+   "seconds": 111.6,
+   "l2": 0.67364202,
+   "l2_values": [
+    0.0085901,
+    0.46774,
+    0.83609,
+    0.95199,
+    1.1038
+   ],
+   "final_loss": 0.035237,
+   "iterations": 1500,
+   "lbfgs_iterations": 0,
+   "error": ""
+  },
+  {
+   "name": "Poisson over an L-shaped domain",
+   "ok": true,
+   "seconds": 41.8,
+   "l2": 0.091426,
+   "l2_values": [
+    0.091426
+   ],
+   "final_loss": 0.00010036,
+   "iterations": 1500,
+   "lbfgs_iterations": 750,
+   "error": ""
+  },
+  {
+   "name": "Laplace equation on a disk",
+   "ok": true,
+   "seconds": 15.4,
+   "l2": 0.001744,
+   "l2_values": [
+    0.001744
+   ],
+   "final_loss": 1.266e-05,
+   "iterations": 1500,
+   "lbfgs_iterations": 0,
+   "error": ""
+  },
+  {
+   "name": "Euler beam",
+   "ok": true,
+   "seconds": 10.4,
+   "l2": 0.046381,
+   "l2_values": [
+    0.046381
+   ],
+   "final_loss": 0.0027439,
+   "iterations": 1500,
+   "lbfgs_iterations": 0,
+   "error": ""
+  },
+  {
+   "name": "Linear elastostatic plate",
+   "ok": true,
+   "seconds": 124.8,
+   "l2": 0.00387444,
+   "l2_values": [
+    0.0028169,
+    0.0046903,
+    0.0012425,
+    0.0035484,
+    0.0070741
+   ],
+   "final_loss": 0.00077206,
+   "iterations": 1500,
+   "lbfgs_iterations": 750,
+   "error": ""
+  },
+  {
+   "name": "Linear elastostatic plate (soft BCs)",
+   "ok": true,
+   "seconds": 160.5,
+   "l2": 0.0106375,
+   "l2_values": [
+    0.0053254,
+    0.011729,
+    0.0041473,
+    0.0099608,
+    0.022025
+   ],
+   "final_loss": 0.0013236,
+   "iterations": 1500,
+   "lbfgs_iterations": 750,
+   "error": ""
+  },
+  {
+   "name": "Helmholtz 2D (Dirichlet)",
+   "ok": true,
+   "seconds": 21.9,
+   "l2": 0.18393,
+   "l2_values": [
+    0.18393
+   ],
+   "final_loss": 18.635,
+   "iterations": 1500,
+   "lbfgs_iterations": 0,
+   "error": ""
+  },
+  {
+   "name": "Helmholtz 2D with a hole",
+   "ok": true,
+   "seconds": 69.0,
+   "l2": 0.92772,
+   "l2_values": [
+    0.92772
+   ],
+   "final_loss": 211.89,
+   "iterations": 1500,
+   "lbfgs_iterations": 0,
+   "error": ""
+  },
+  {
+   "name": "Helmholtz sound-hard scattering (absorbing BC)",
+   "ok": true,
+   "seconds": 438.6,
+   "l2": 0.98645,
+   "l2_values": [
+    0.98209,
+    0.99081
+   ],
+   "final_loss": 0.27545,
+   "iterations": 1500,
+   "lbfgs_iterations": 0,
+   "error": ""
+  },
+  {
+   "name": "Kovasznay flow",
+   "ok": true,
+   "seconds": 160.4,
+   "l2": 0.0037661333333333332,
+   "l2_values": [
+    0.0017036,
+    0.0067858,
+    0.002809
+   ],
+   "final_loss": 3.6862e-05,
+   "iterations": 1500,
+   "lbfgs_iterations": 750,
+   "error": ""
+  },
+  {
+   "name": "Burgers equation with RAR",
+   "ok": true,
+   "seconds": 33.6,
+   "l2": 0.0405968,
+   "l2_values": [
+    0.012846,
+    0.014743,
+    0.04347,
+    0.062369,
+    0.069556
+   ],
+   "final_loss": 0.00039019,
+   "iterations": 1500,
+   "lbfgs_iterations": 750,
+   "error": ""
+  },
+  {
+   "name": "Heat equation",
+   "ok": true,
+   "seconds": 16.2,
+   "l2": 0.010064489999999999,
+   "l2_values": [
+    0.00056535,
+    0.0010969,
+    0.0014958,
+    0.0080474,
+    0.039117
+   ],
+   "final_loss": 1.1384e-06,
+   "iterations": 1500,
+   "lbfgs_iterations": 750,
+   "error": ""
+  },
+  {
+   "name": "Heat equation with resampling",
+   "ok": true,
+   "seconds": 22.1,
+   "l2": 0.006575226000000001,
+   "l2_values": [
+    0.0001946,
+    0.00037192,
+    0.00092611,
+    0.0052315,
+    0.026152
+   ],
+   "final_loss": 4.6543e-07,
+   "iterations": 1500,
+   "lbfgs_iterations": 750,
+   "error": ""
+  },
+  {
+   "name": "Diffusion equation",
+   "ok": true,
+   "seconds": 9.0,
+   "l2": 0.0330516,
+   "l2_values": [
+    0.023659,
+    0.026869,
+    0.016603,
+    0.021872,
+    0.076255
+   ],
+   "final_loss": 0.0016123,
+   "iterations": 1500,
+   "lbfgs_iterations": 0,
+   "error": ""
+  },
+  {
+   "name": "Diffusion equation with hard IC and BC",
+   "ok": true,
+   "seconds": 9.1,
+   "l2": 0.0045368584988,
+   "l2_values": [
+    9.2494e-08,
+    0.0044575,
+    0.0025599,
+    0.0052248,
+    0.010442
+   ],
+   "final_loss": 0.00070924,
+   "iterations": 1500,
+   "lbfgs_iterations": 0,
+   "error": ""
+  },
+  {
+   "name": "Diffusion equation with resampling",
+   "ok": true,
+   "seconds": 8.8,
+   "l2": 0.037226999999999996,
+   "l2_values": [
+    0.03326,
+    0.051792,
+    0.035651,
+    0.016002,
+    0.04943
+   ],
+   "final_loss": 0.0020459,
+   "iterations": 1500,
+   "lbfgs_iterations": 0,
+   "error": ""
+  },
+  {
+   "name": "Diffusion-reaction equation",
+   "ok": true,
+   "seconds": 12.9,
+   "l2": 0.076773418383,
+   "l2_values": [
+    9.1915e-08,
+    0.037318,
+    0.074479,
+    0.1137,
+    0.15837
+   ],
+   "final_loss": 1.6352,
+   "iterations": 1500,
+   "lbfgs_iterations": 0,
+   "error": ""
+  },
+  {
+   "name": "Allen-Cahn equation",
+   "ok": true,
+   "seconds": 50.3,
+   "l2": 0.132180219152,
+   "l2_values": [
+    9.576e-08,
+    0.072511,
+    0.18403,
+    0.23456,
+    0.1698
+   ],
+   "final_loss": 0.0024469,
+   "iterations": 1500,
+   "lbfgs_iterations": 750,
+   "error": ""
+  },
+  {
+   "name": "Klein-Gordon equation",
+   "ok": true,
+   "seconds": 313.4,
+   "l2": 0.08229918,
+   "l2_values": [
+    0.0048479,
+    0.031447,
+    0.19064,
+    0.15332,
+    0.031241
+   ],
+   "final_loss": 0.00022466,
+   "iterations": 1500,
+   "lbfgs_iterations": 0,
+   "error": ""
+  },
+  {
+   "name": "Schr\u00f6dinger equation",
+   "ok": true,
+   "seconds": 626.5,
+   "l2": 0.008715771428571429,
+   "l2_values": [
+    0.0039315,
+    0.0042579,
+    0.0062934,
+    0.012096,
+    0.014972,
+    0.010955,
+    0.0085046
+   ],
+   "final_loss": 9.5464e-05,
+   "iterations": 1500,
+   "lbfgs_iterations": 750,
+   "error": ""
+  },
+  {
+   "name": "Black-Scholes equation (call option)",
+   "ok": true,
+   "seconds": 70.6,
+   "l2": 0.005025633333333334,
+   "l2_values": [
+    0.0070326,
+    0.0051028,
+    0.0029415
+   ],
+   "final_loss": 0.34559,
+   "iterations": 1500,
+   "lbfgs_iterations": 750,
+   "error": ""
+  },
+  {
+   "name": "Inverse: Lorenz system",
+   "ok": true,
+   "seconds": 34.6,
+   "l2": 0.10460599999999999,
+   "l2_values": [
+    0.11373,
+    0.1306,
+    0.069488
+   ],
+   "final_loss": 2.761,
+   "iterations": 1500,
+   "lbfgs_iterations": 750,
+   "error": ""
+  },
+  {
+   "name": "Inverse: Lorenz system with exogenous input",
+   "ok": true,
+   "seconds": 16.0,
+   "l2": 0.6913966666666665,
+   "l2_values": [
+    1.0149,
+    0.69664,
+    0.36265
+   ],
+   "final_loss": 117.41,
+   "iterations": 1500,
+   "lbfgs_iterations": 0,
+   "error": ""
+  },
+  {
+   "name": "Inverse: diffusion equation",
+   "ok": true,
+   "seconds": 11.5,
+   "l2": 0.385748,
+   "l2_values": [
+    0.2867,
+    0.34122,
+    0.40601,
+    0.44378,
+    0.45103
+   ],
+   "final_loss": 0.069483,
+   "iterations": 1500,
+   "lbfgs_iterations": 0,
+   "error": ""
+  },
+  {
+   "name": "Inverse: Poisson with unknown forcing field",
+   "ok": true,
+   "seconds": 13.7,
+   "l2": 0.34381,
+   "l2_values": [
+    0.19205,
+    0.49557
+   ],
+   "final_loss": 33.269,
+   "iterations": 1500,
+   "lbfgs_iterations": 0,
+   "error": ""
+  },
+  {
+   "name": "Inverse: Poisson with unknown forcing field (batches)",
+   "ok": true,
+   "seconds": 13.3,
+   "l2": 0.392625,
+   "l2_values": [
+    0.23412,
+    0.55113
+   ],
+   "final_loss": 46.999,
+   "iterations": 1500,
+   "lbfgs_iterations": 0,
+   "error": ""
+  },
+  {
+   "name": "Inverse: diffusion-reaction with space-dependent rate",
+   "ok": true,
+   "seconds": 10.4,
+   "l2": 0.43543,
+   "l2_values": [
+    0.43543
+   ],
+   "final_loss": 0.0023016,
+   "iterations": 1500,
+   "lbfgs_iterations": 0,
+   "error": ""
+  },
+  {
+   "name": "Inverse: Brinkman-Forchheimer model",
+   "ok": true,
+   "seconds": 15.8,
+   "l2": 0.26786,
+   "l2_values": [
+    0.26786
+   ],
+   "final_loss": 0.045145,
+   "iterations": 1500,
+   "lbfgs_iterations": 0,
+   "error": ""
+  },
+  {
+   "name": "Inverse: fractional Poisson equation 1D",
+   "ok": true,
+   "seconds": 308.7,
+   "l2": 0.010307,
+   "l2_values": [
+    0.010307
+   ],
+   "final_loss": 0.0077086,
+   "iterations": 1500,
+   "lbfgs_iterations": 0,
+   "error": ""
+  },
+  {
+   "name": "Inverse: fractional Poisson equation 2D",
+   "ok": true,
+   "seconds": 787.2,
+   "l2": 0.0075492,
+   "l2_values": [
+    0.0075492
+   ],
+   "final_loss": 0.018803,
+   "iterations": 1500,
+   "lbfgs_iterations": 0,
+   "error": ""
+  }
+ ]
+}

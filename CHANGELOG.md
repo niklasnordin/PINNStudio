@@ -28,7 +28,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Exports**: solution data as VTK for ParaView (a `.pvd` series of the times; `NaN` outside a domain that is not a box), besides or instead of text; the trained network as TorchScript and `torch.export` files, usable without PINNStudio or DeepXDE.
 - **`environment.json`** in every run folder: Python, PyTorch, CUDA, DeepXDE and other versions, device, precision and seed.
 - **Docs**: *Scaling and nondimensional form*; what lies outside PINNStudio's scope (operator learning, units, meshes) in *Scope and limitations*; the command line and recovery in *Save, reopen and export*.
-- **Development**: model-view-controller tiers checked by `tests/test_mvc.py` (*Model, views and controllers*); `ruff` lint; quality, nightly (export equivalence, coverage) and release workflows (checksums, PyPI trusted publishing after approval); `constraints.txt`; Dependabot.
+- **Development**: model-view-controller tiers checked by `tests/test_mvc.py` (*Model, views and controllers*); `ruff` lint; quality, nightly (export equivalence, coverage, and the L2 error of every example with a reference against `benchmarks/accuracy_baseline.json`, as a report that never fails, by `tools/accuracy_report.py`) and release workflows (checksums, PyPI trusted publishing after approval); `constraints.txt`; Dependabot.
 
 ### Changed
 - Each run has its own scratch folder for its plots and temporary files; two runs at once (or two PINNStudios) no longer read each other's files from a shared `/tmp`.
