@@ -1,7 +1,8 @@
 name: Nightly
 
 # Every night: Solve's script against the exported script for every example (tools/check_export_equivalence.py,
-# short phases), and the test suite with coverage. Results as artifacts.
+# short phases), the test suite with coverage, and the accuracy of every example with a reference solution
+# against benchmarks/accuracy_baseline.json (a report in the job summary). Results as artifacts.
 on:
   schedule:
     - cron: "17 2 * * *"
@@ -61,3 +62,39 @@ jobs:
         with:
           name: coverage
           path: coverage.xml
+
+  accuracy:
+    # Every example with a reference solution, trained with Adam capped at 1500 iterations (L-BFGS 750) and a
+    # fixed seed; the L2 errors against benchmarks/accuracy_baseline.json go to the job summary. It only
+    # reports (tools/accuracy_report.py always exits 0); the results are kept as an artifact.
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      QT_QPA_PLATFORM: offscreen
+      DDE_BACKEND: pytorch
+      MPLBACKEND: Agg
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install PINNStudio (CPU PyTorch)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -e .
+      - name: Train every example with a reference
+        continue-on-error: true
+        run: |
+          python tools/run_deepxde_examples.py --with-reference --cap 1500 --timeout 1200 \
+            --set train_device=cpu --json accuracy.json --out accuracy-runs
+      - name: Accuracy against the baseline
+        if: always()
+        run: python tools/accuracy_report.py accuracy.json --out "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: example-accuracy
+          path: |
+            accuracy.json
+            accuracy-runs/*/log.txt

@@ -5,12 +5,14 @@ the GUI and summarise their Error Analysis results.
     python tools/run_deepxde_examples.py --out runs/            # full settings
     python tools/run_deepxde_examples.py --smoke --out runs/    # a few hundred iterations each
     python tools/run_deepxde_examples.py --only "Burgers" --export
+    python tools/run_deepxde_examples.py --with-reference --cap 1500 --json acc.json --out runs/   # nightly accuracy
 
 Each example runs the script the GUI's Solve button runs (or, with
 --export, the "Export DeepXDE Script" one) in <out>/<example>/, with its
 console output saved to log.txt there. The summary lists the exit code,
 the run time, the L2 relative errors printed by Error Analysis and, for
-inverse problems, the inferred parameters.
+inverse problems, the inferred parameters. --json writes them per example (tools/accuracy_report.py compares
+two such files); --cap N limits Adam to N iterations and L-BFGS to N/2, as --smoke does with 300.
 """
 import argparse
 import ast
@@ -34,10 +36,10 @@ def _slug(name):
     return re.sub(r"[^A-Za-z0-9]+", "_", name).strip("_")
 
 
-def _smoke(cfg, n=300):
-    """Same problem, a few hundred iterations: checks that it runs."""
+def _smoke(cfg, n=300, lbfgs=None):
+    """Same problem, a few hundred iterations: checks that it runs (L-BFGS: n/3, or `lbfgs`)."""
     cfg.iterations = min(cfg.iterations, n)
-    cfg.iterations2 = min(cfg.iterations2, n // 3)
+    cfg.iterations2 = min(cfg.iterations2, n // 3 if lbfgs is None else lbfgs)
     if cfg.optimizer_scheduler:
         phases = json.loads(cfg.scheduler_phases)
         for p in phases:
@@ -69,6 +71,10 @@ def main():
     ap.add_argument("--inverse", action="store_true",
                     help="run the Inverse-mode version of examples that have one (others are skipped)")
     ap.add_argument("--timeout", type=float, default=7200)
+    ap.add_argument("--cap", type=int, default=0, help="at most N Adam and N/2 L-BFGS iterations per example")
+    ap.add_argument("--json", default="", help="write the results per example to this JSON file")
+    ap.add_argument("--with-reference", action="store_true",
+                    help="only examples with a reference solution (an L2 error to report); sweeps are left out")
     args = ap.parse_args()
 
     wanted = [s for s in args.only.split("|") if s]
@@ -83,12 +89,18 @@ def main():
                 and not any(s in n for s in skipped for n in _names(e)) and (e.inverse or not args.inverse)]
     gen = generate_clean_script if args.export else generate_script
     rows = []
+    results = []
     for ex in examples:
         d = os.path.abspath(os.path.join(args.out, _slug(ex.name) + ("_inverse" if args.inverse else "")))
         os.makedirs(d, exist_ok=True)
         cfg = dx.build_config(ex, REF_ROOT, keep={"save_dir": d}, inverse=args.inverse)
+        if args.with_reference and (cfg.sweep_enabled or not (
+                (cfg.ea_files and cfg.ea_files != "[]") or cfg.ea_ref_mode == "formula")):
+            continue
         if args.smoke:
             _smoke(cfg)
+        elif args.cap:
+            _smoke(cfg, args.cap, lbfgs=args.cap // 2)
         if args.plot_type and not cfg.steady_state and cfg.problem_dim != "ODE":
             cfg.plot_type = args.plot_type
         for item in args.set:
@@ -134,11 +146,23 @@ def main():
         if rc != 0:
             tail = " | ".join(line for line in (err or out).strip().splitlines()[-3:])
         rows.append((ex.name, rc, dt, l2, tail))
+        loss = re.findall(r"Final loss:\s*([0-9.eE+-]+)", out)
+        results.append({"name": ex.name, "ok": rc == 0, "seconds": round(dt, 1),
+                        "l2": (sum(float(v) for v in l2) / len(l2)) if l2 else None,
+                        "l2_values": [float(v) for v in l2], "final_loss": float(loss[-1]) if loss else None,
+                        "iterations": cfg.iterations, "lbfgs_iterations": cfg.iterations2,
+                        "error": tail[:400] if rc != 0 else ""})
         print(f"{'OK ' if rc == 0 else 'ERR'} {ex.name:55s} {dt:7.0f}s  L2: {' '.join(l2[-8:])}  "
               f"{'  '.join(params)}  {tail[:400]}",
               flush=True)
     bad = [r for r in rows if r[1] != 0]
     print(f"\n{len(rows) - len(bad)}/{len(rows)} ran without error")
+    if args.json:
+        import platform
+        import torch
+        with open(args.json, "w") as fh:
+            json.dump({"cap": args.cap, "smoke": args.smoke, "python": platform.python_version(),
+                       "torch": torch.__version__, "platform": platform.platform(), "examples": results}, fh, indent=1)
     return 1 if bad else 0
 
 
