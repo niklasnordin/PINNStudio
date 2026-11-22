@@ -271,7 +271,7 @@ class PythonCodeController(QObject):
         """Start a dry run of the Solve script in a second process. `extra_env` adds to its environment."""
         if self._proc is not None:
             return False
-        cfg = self._config()
+        cfg = user_cfg = self._config()
         errors = PC.check_source(cfg.python_code, needs=(("pde",) if cfg.pde_mode == "python" else ())
                                  + (("conditions",) if cfg.conditions_mode == "python" else ()))
         if errors:
@@ -301,8 +301,10 @@ class PythonCodeController(QObject):
             np.save(epath, np.asarray(edges[1], dtype=float))
             extra["PINNSTUDIO_DRY_RUN_EDGES"] = epath
             self._pending_edges = edges
-        env = warm.run_env(extra=dict(PINNSTUDIO_DRY_RUN="1", CUDA_VISIBLE_DEVICES="-1", MPLBACKEND="Agg",
-                                      DDE_BACKEND="pytorch", **extra))
+        # the device as Solve has it (DeepXDE picks it when imported), so Check and Solve share the Python kept
+        # ready; a new Python runs the check on the CPU (the dry run's own setting)
+        env = warm.run_env(user_cfg, extra=dict(PINNSTUDIO_DRY_RUN="1", MPLBACKEND="Agg", DDE_BACKEND="pytorch",
+                                                **extra))
         run = _CheckRun()
         self._proc = run
         self.state.put_result({})

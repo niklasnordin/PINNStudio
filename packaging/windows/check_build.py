@@ -111,8 +111,7 @@ for label, keep in (("a new process", False), ("the process kept ready", True)):
     warm.POOL.close()
     warm.POOL.set_enabled(keep)
     if keep:
-        warm.POOL.prestart(warm.run_env(extra=dict(PINNSTUDIO_DRY_RUN="1", CUDA_VISIBLE_DEVICES="-1",
-                                                   MPLBACKEND="Agg", DDE_BACKEND="pytorch")))
+        warm.POOL.prestart(warm.run_env(w._build_config()))       # as the window starts it
         assert warm.POOL._spare is not None and warm.POOL._spare.ready.wait(600), "no process kept ready"
     t0 = time.perf_counter()
     assert w.python_code.check(), "Check did not start"
