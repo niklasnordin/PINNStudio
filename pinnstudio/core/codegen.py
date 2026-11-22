@@ -5310,6 +5310,146 @@ def _dry_run_code():
     return 'def _dry_run(model, data, net):\n    # PINNSTUDIO_DRY_RUN (the Python code page\'s Check, and the tests): the equations on 64 training points,\n    # the initial loss of every term, then stop -- one JSON line, nothing trained or saved\n    import json as _dr_json\n    import traceback as _dr_tb\n    try:\n        if "_frac_apply" in globals():\n            _dr_r = []          # fractional: the residual needs the training points\' matrix; the losses show it\n        else:\n            _dr_x = torch.as_tensor(np.asarray(data.train_x[:64])).requires_grad_(True)\n            dde.grad.clear()\n            _dr_r = pde(_dr_x, net(_dr_x))\n            _dr_r = _dr_r if isinstance(_dr_r, (list, tuple)) else [_dr_r]\n        model.train(iterations=0, display_every=1, verbose=0)\n        _dr_l = [float(_v) for _v in np.ravel(model.losshistory.loss_train[-1])]\n        _dr_names = (_py_cond.names() if _PY_CONDITIONS\n                     else [f"row {_i + 1}" for _i in range(len(_constraints))])\n        print("PINNSTUDIO_DRY_RUN " + _dr_json.dumps({"ok": True, "residuals": [list(_r.shape) for _r in _dr_r],\n                                                      "conditions": _dr_names, "losses": _dr_l}), flush=True)\n    except BaseException as _dr_e:\n        _dr_line = 0\n        for _fr in _dr_tb.extract_tb(_dr_e.__traceback__):\n            if _fr.filename == "<equations>":\n                _dr_line = _fr.lineno\n        print("PINNSTUDIO_DRY_RUN " + _dr_json.dumps({"ok": False, "error": f"{type(_dr_e).__name__}: {_dr_e}",\n                                                      "line": _dr_line}), flush=True)\n    raise SystemExit(0)\n'
 
 
+def _gs_loss_weights_code(config):
+    """The Solve script's loss weights: one per equation, then each boundary condition and active initial
+    condition (the Python code's own weight= with conditions in Python), then the observation weights. Sets
+    _multi_weights."""
+    return f"""# ── Loss weights ─────────────────────────────────────────────
+_n_out_w = {config.num_outputs}
+_ic_a  = "{config.ic_active}".split(",")
+_wm_list = [float(v) for v in "{config.loss_weights_multi}".split(",") if v.strip()] if "{config.loss_weights_multi}".strip() else []
+
+_pde_w = []
+_wi = 0
+for _ei_w in range({_n_equations(config)}):  # one per equation
+    _pde_w.append(_wm_list[_wi] if _wi < len(_wm_list) else 1.0); _wi += 1
+
+if _PY_CONDITIONS:
+    # each condition's weight= in the code, after the PDE weights from the Loss weights page
+    _multi_weights = list(_pde_w) + _py_cond.weights()
+    print(f"  PDE weights: {{_pde_w}}")
+    print(f"  Condition weights (Python code): {{_py_cond.weights()}}")
+elif _custom_bc_entries or _bc_panel_data_present:
+    _bc_entry_w = []
+    for _bi_w in range(len(_custom_bc_entries)):
+        _bc_entry_w.append(_wm_list[_wi] if _wi < len(_wm_list) else 1.0); _wi += 1
+
+    _ic_w = []
+    for _oi_w in range(_n_out_w):
+        if not _is_steady and ((_oi_w == 0 and {config.forward_ic_from_file}) or (_oi_w < len(_ic_a) and _ic_a[_oi_w].strip() == "True")):
+            _ic_w.append(_wm_list[_wi] if _wi < len(_wm_list) else 1.0); _wi += 1
+        else:
+            _ic_w.append(None)     # the window writes a weight for each active IC only
+
+    _multi_weights = list(_pde_w) + list(_bc_entry_w)
+    for _oi_w in range(_n_out_w):
+        if _ic_w[_oi_w] is not None:
+            _multi_weights.append(_ic_w[_oi_w])
+
+    print(f"  PDE weights: {{_pde_w}}")
+    print(f"  BC weights ({{len(_custom_bc_entries)}} rows from the Boundary Conditions panel): {{_bc_entry_w}}")
+    print(f"  IC weights: {{[w for w in _ic_w if w is not None]}}")
+else:
+    # Legacy per-side weights, for configs saved before the Boundary
+    # Conditions panel existed (custom_bc_json empty).
+    _bc_la = "{config.bc_left_active}".split(",")
+    _bc_ra = "{config.bc_right_active}".split(",")
+    _bc_ba = "{config.bc_bottom_active}".split(",")
+    _bc_ta = "{config.bc_top_active}".split(",")
+
+    _bcl_w = []; _bcr_w = []; _bcb_w = []; _bct_w = []; _ic_w = []
+    for _oi_w in range(_n_out_w):
+        if _oi_w < len(_bc_la) and _bc_la[_oi_w].strip() == "True":
+            _bcl_w.append(_wm_list[_wi] if _wi < len(_wm_list) else 1.0); _wi += 1
+        else:
+            _bcl_w.append(None); _wi += 1 if _wi < len(_wm_list) else 0
+        _brt_check = "{config.bc_right_types}".split(",")
+        _blt_check = "{config.bc_left_types}".split(",")
+        _brt_is_periodic = _oi_w < len(_brt_check) and _brt_check[_oi_w].strip() == "Periodic"
+        _blt_is_periodic = _oi_w < len(_blt_check) and _blt_check[_oi_w].strip() == "Periodic"
+        if _oi_w < len(_bc_ra) and _bc_ra[_oi_w].strip() == "True" and not _brt_is_periodic and not _blt_is_periodic:
+            _bcr_w.append(_wm_list[_wi] if _wi < len(_wm_list) else 1.0); _wi += 1
+        else:
+            _bcr_w.append(None)  # do NOT advance _wi — GUI sends no value for this slot
+        _btt_check = "{config.bc_top_types}".split(",")
+        _bbt_check = "{config.bc_bottom_types}".split(",")
+        if _is_2d:
+            if _oi_w < len(_bc_ba) and _bc_ba[_oi_w].strip() == "True":
+                _bcb_w.append(_wm_list[_wi] if _wi < len(_wm_list) else 1.0); _wi += 1
+            else:
+                _bcb_w.append(None); _wi += 1 if _wi < len(_wm_list) else 0
+            _btt_is_periodic = _oi_w < len(_btt_check) and _btt_check[_oi_w].strip() == "Periodic"
+            _bbt_is_periodic = _oi_w < len(_bbt_check) and _bbt_check[_oi_w].strip() == "Periodic"
+            if _oi_w < len(_bc_ta) and _bc_ta[_oi_w].strip() == "True" and not _btt_is_periodic and not _bbt_is_periodic:
+                _bct_w.append(_wm_list[_wi] if _wi < len(_wm_list) else 1.0); _wi += 1
+            else:
+                _bct_w.append(None)  # do NOT advance _wi — GUI sends no value for this slot
+        else:
+            _bcb_w.append(None); _bct_w.append(None)
+        # Same _is_steady guard as the constraints block above and as the
+        # Boundary-Conditions-panel-active branch's own _ic_w loop just
+        # above (which already checks "not _is_steady and (...)") -- a
+        # steady-state problem builds no IC constraint at all now, so a
+        # weight entry for one here (this legacy branch forgot the check
+        # before this fix) would desync _multi_weights from the real
+        # constraints list by one slot, and shift every weight after it
+        # for any later output too.
+        if (not _is_steady) and ((_oi_w == 0 and {config.forward_ic_from_file}) or (_oi_w < len(_ic_a) and _ic_a[_oi_w].strip() == "True")):
+            _ic_w.append(_wm_list[_wi] if _wi < len(_wm_list) else 1.0); _wi += 1
+        else:
+            _ic_w.append(None); _wi += 1 if (not _is_steady and _wi < len(_wm_list)) else 0
+
+    _bc_left_deriv_active  = "{config.bc_left_deriv}".split(",")
+    _bc_bottom_deriv_active = "{config.bc_bottom_deriv}".split(",")
+    _multi_weights = list(_pde_w)
+    for _oi_w in range(_n_out_w):
+        if _bcl_w[_oi_w] is not None:
+            _multi_weights.append(_bcl_w[_oi_w])
+            # Add extra weight for derivative periodic BC if enabled -- this
+            # must check the LEFT edge's own periodic/derivative flags, not
+            # the bottom edge's (a copy-paste bug: this block was gated on
+            # _bbt_check/_bc_bottom_deriv_active, the exact same variables
+            # the bottom block below correctly uses for itself, so a
+            # left-side periodic+derivative BC never got its extra weight
+            # slot at all while a bottom-side one could spuriously trigger
+            # this block instead, desyncing every loss weight after it).
+            _blt_is_per = _oi_w < len(_blt_check) and _blt_check[_oi_w].strip() == "Periodic"
+            _bld_is_active = _oi_w < len(_bc_left_deriv_active) and _bc_left_deriv_active[_oi_w].strip() == "True"
+            if _blt_is_per and _bld_is_active:
+                _multi_weights.append(_wm_list[_wi] if _wi < len(_wm_list) else 1.0); _wi += 1
+        if _bcr_w[_oi_w] is not None: _multi_weights.append(_bcr_w[_oi_w])
+        if _bcb_w[_oi_w] is not None:
+            _multi_weights.append(_bcb_w[_oi_w])
+            # Add extra weight for derivative periodic BC if enabled -- same
+            # fix as the left-edge block above: must actually consume the
+            # next GUI-provided weight from _wm_list and advance the shared
+            # _wi cursor, not hardcode 1.0. A hardcoded weight here silently
+            # discards whatever weight the user set for this BC, AND (since
+            # _wi was never advanced) desyncs every weight slot still to be
+            # read after it for this or a later output.
+            _bbt_is_per = _oi_w < len(_bbt_check) and _bbt_check[_oi_w].strip() == "Periodic"
+            _bbd_is_active = _oi_w < len(_bc_bottom_deriv_active) and _bc_bottom_deriv_active[_oi_w].strip() == "True"
+            if _bbt_is_per and _bbd_is_active:
+                _multi_weights.append(_wm_list[_wi] if _wi < len(_wm_list) else 1.0); _wi += 1
+        if _bct_w[_oi_w] is not None: _multi_weights.append(_bct_w[_oi_w])
+        if _ic_w[_oi_w]  is not None: _multi_weights.append(_ic_w[_oi_w])
+
+    print(f"  PDE weights: {{_pde_w}}")
+    print(f"  BC left: {{[w for w in _bcl_w if w is not None]}}")
+    print(f"  BC right: {{[w for w in _bcr_w if w is not None]}}")
+    if _is_2d:
+        print(f"  BC bottom: {{[w for w in _bcb_w if w is not None]}}")
+        print(f"  BC top: {{[w for w in _bct_w if w is not None]}}")
+    print(f"  IC weights: {{[w for w in _ic_w if w is not None]}}")
+
+if _problem_type == "Inverse":
+    # One observation-loss weight per measured-data file, same order as
+    # the PointSetBC constraints appended just below.
+    _multi_weights = _multi_weights + [_e[3] for _e in _obs_entries]
+
+print(f"Loss weights: {{_multi_weights}} ({{len(_multi_weights)}} terms for {{len(_constraints)}} constraints)")"""
+
+
 def generate_script(config):
     _py_any = _python_pde(config) or _python_conditions(config)
     _pde_consts = _pde_constant_dict(config) if _py_any else {}
@@ -7055,140 +7195,7 @@ else:
                 return dde.icbc.IC(geomtime, _ic_fn, lambda x, on_initial: on_initial, component=comp)
             _constraints.append(_make_ic(_ic_expr, _comp))
 
-# ── Loss weights ─────────────────────────────────────────────
-_n_out_w = {config.num_outputs}
-_ic_a  = "{config.ic_active}".split(",")
-_wm_list = [float(v) for v in "{config.loss_weights_multi}".split(",") if v.strip()] if "{config.loss_weights_multi}".strip() else []
-
-_pde_w = []
-_wi = 0
-for _ei_w in range({_n_equations(config)}):  # one per equation
-    _pde_w.append(_wm_list[_wi] if _wi < len(_wm_list) else 1.0); _wi += 1
-
-if _PY_CONDITIONS:
-    # each condition's weight= in the code, after the PDE weights from the Loss weights page
-    _multi_weights = list(_pde_w) + _py_cond.weights()
-    print(f"  PDE weights: {{_pde_w}}")
-    print(f"  Condition weights (Python code): {{_py_cond.weights()}}")
-elif _custom_bc_entries or _bc_panel_data_present:
-    _bc_entry_w = []
-    for _bi_w in range(len(_custom_bc_entries)):
-        _bc_entry_w.append(_wm_list[_wi] if _wi < len(_wm_list) else 1.0); _wi += 1
-
-    _ic_w = []
-    for _oi_w in range(_n_out_w):
-        if not _is_steady and ((_oi_w == 0 and {config.forward_ic_from_file}) or (_oi_w < len(_ic_a) and _ic_a[_oi_w].strip() == "True")):
-            _ic_w.append(_wm_list[_wi] if _wi < len(_wm_list) else 1.0); _wi += 1
-        else:
-            _ic_w.append(None)     # the window writes a weight for each active IC only
-
-    _multi_weights = list(_pde_w) + list(_bc_entry_w)
-    for _oi_w in range(_n_out_w):
-        if _ic_w[_oi_w] is not None:
-            _multi_weights.append(_ic_w[_oi_w])
-
-    print(f"  PDE weights: {{_pde_w}}")
-    print(f"  BC weights ({{len(_custom_bc_entries)}} rows from the Boundary Conditions panel): {{_bc_entry_w}}")
-    print(f"  IC weights: {{[w for w in _ic_w if w is not None]}}")
-else:
-    # Legacy per-side weights, for configs saved before the Boundary
-    # Conditions panel existed (custom_bc_json empty).
-    _bc_la = "{config.bc_left_active}".split(",")
-    _bc_ra = "{config.bc_right_active}".split(",")
-    _bc_ba = "{config.bc_bottom_active}".split(",")
-    _bc_ta = "{config.bc_top_active}".split(",")
-
-    _bcl_w = []; _bcr_w = []; _bcb_w = []; _bct_w = []; _ic_w = []
-    for _oi_w in range(_n_out_w):
-        if _oi_w < len(_bc_la) and _bc_la[_oi_w].strip() == "True":
-            _bcl_w.append(_wm_list[_wi] if _wi < len(_wm_list) else 1.0); _wi += 1
-        else:
-            _bcl_w.append(None); _wi += 1 if _wi < len(_wm_list) else 0
-        _brt_check = "{config.bc_right_types}".split(",")
-        _blt_check = "{config.bc_left_types}".split(",")
-        _brt_is_periodic = _oi_w < len(_brt_check) and _brt_check[_oi_w].strip() == "Periodic"
-        _blt_is_periodic = _oi_w < len(_blt_check) and _blt_check[_oi_w].strip() == "Periodic"
-        if _oi_w < len(_bc_ra) and _bc_ra[_oi_w].strip() == "True" and not _brt_is_periodic and not _blt_is_periodic:
-            _bcr_w.append(_wm_list[_wi] if _wi < len(_wm_list) else 1.0); _wi += 1
-        else:
-            _bcr_w.append(None)  # do NOT advance _wi — GUI sends no value for this slot
-        _btt_check = "{config.bc_top_types}".split(",")
-        _bbt_check = "{config.bc_bottom_types}".split(",")
-        if _is_2d:
-            if _oi_w < len(_bc_ba) and _bc_ba[_oi_w].strip() == "True":
-                _bcb_w.append(_wm_list[_wi] if _wi < len(_wm_list) else 1.0); _wi += 1
-            else:
-                _bcb_w.append(None); _wi += 1 if _wi < len(_wm_list) else 0
-            _btt_is_periodic = _oi_w < len(_btt_check) and _btt_check[_oi_w].strip() == "Periodic"
-            _bbt_is_periodic = _oi_w < len(_bbt_check) and _bbt_check[_oi_w].strip() == "Periodic"
-            if _oi_w < len(_bc_ta) and _bc_ta[_oi_w].strip() == "True" and not _btt_is_periodic and not _bbt_is_periodic:
-                _bct_w.append(_wm_list[_wi] if _wi < len(_wm_list) else 1.0); _wi += 1
-            else:
-                _bct_w.append(None)  # do NOT advance _wi — GUI sends no value for this slot
-        else:
-            _bcb_w.append(None); _bct_w.append(None)
-        # Same _is_steady guard as the constraints block above and as the
-        # Boundary-Conditions-panel-active branch's own _ic_w loop just
-        # above (which already checks "not _is_steady and (...)") -- a
-        # steady-state problem builds no IC constraint at all now, so a
-        # weight entry for one here (this legacy branch forgot the check
-        # before this fix) would desync _multi_weights from the real
-        # constraints list by one slot, and shift every weight after it
-        # for any later output too.
-        if (not _is_steady) and ((_oi_w == 0 and {config.forward_ic_from_file}) or (_oi_w < len(_ic_a) and _ic_a[_oi_w].strip() == "True")):
-            _ic_w.append(_wm_list[_wi] if _wi < len(_wm_list) else 1.0); _wi += 1
-        else:
-            _ic_w.append(None); _wi += 1 if (not _is_steady and _wi < len(_wm_list)) else 0
-
-    _bc_left_deriv_active  = "{config.bc_left_deriv}".split(",")
-    _bc_bottom_deriv_active = "{config.bc_bottom_deriv}".split(",")
-    _multi_weights = list(_pde_w)
-    for _oi_w in range(_n_out_w):
-        if _bcl_w[_oi_w] is not None:
-            _multi_weights.append(_bcl_w[_oi_w])
-            # Add extra weight for derivative periodic BC if enabled -- this
-            # must check the LEFT edge's own periodic/derivative flags, not
-            # the bottom edge's (a copy-paste bug: this block was gated on
-            # _bbt_check/_bc_bottom_deriv_active, the exact same variables
-            # the bottom block below correctly uses for itself, so a
-            # left-side periodic+derivative BC never got its extra weight
-            # slot at all while a bottom-side one could spuriously trigger
-            # this block instead, desyncing every loss weight after it).
-            _blt_is_per = _oi_w < len(_blt_check) and _blt_check[_oi_w].strip() == "Periodic"
-            _bld_is_active = _oi_w < len(_bc_left_deriv_active) and _bc_left_deriv_active[_oi_w].strip() == "True"
-            if _blt_is_per and _bld_is_active:
-                _multi_weights.append(_wm_list[_wi] if _wi < len(_wm_list) else 1.0); _wi += 1
-        if _bcr_w[_oi_w] is not None: _multi_weights.append(_bcr_w[_oi_w])
-        if _bcb_w[_oi_w] is not None:
-            _multi_weights.append(_bcb_w[_oi_w])
-            # Add extra weight for derivative periodic BC if enabled -- same
-            # fix as the left-edge block above: must actually consume the
-            # next GUI-provided weight from _wm_list and advance the shared
-            # _wi cursor, not hardcode 1.0. A hardcoded weight here silently
-            # discards whatever weight the user set for this BC, AND (since
-            # _wi was never advanced) desyncs every weight slot still to be
-            # read after it for this or a later output.
-            _bbt_is_per = _oi_w < len(_bbt_check) and _bbt_check[_oi_w].strip() == "Periodic"
-            _bbd_is_active = _oi_w < len(_bc_bottom_deriv_active) and _bc_bottom_deriv_active[_oi_w].strip() == "True"
-            if _bbt_is_per and _bbd_is_active:
-                _multi_weights.append(_wm_list[_wi] if _wi < len(_wm_list) else 1.0); _wi += 1
-        if _bct_w[_oi_w] is not None: _multi_weights.append(_bct_w[_oi_w])
-        if _ic_w[_oi_w]  is not None: _multi_weights.append(_ic_w[_oi_w])
-
-    print(f"  PDE weights: {{_pde_w}}")
-    print(f"  BC left: {{[w for w in _bcl_w if w is not None]}}")
-    print(f"  BC right: {{[w for w in _bcr_w if w is not None]}}")
-    if _is_2d:
-        print(f"  BC bottom: {{[w for w in _bcb_w if w is not None]}}")
-        print(f"  BC top: {{[w for w in _bct_w if w is not None]}}")
-    print(f"  IC weights: {{[w for w in _ic_w if w is not None]}}")
-
-if _problem_type == "Inverse":
-    # One observation-loss weight per measured-data file, same order as
-    # the PointSetBC constraints appended just below.
-    _multi_weights = _multi_weights + [_e[3] for _e in _obs_entries]
-
-print(f"Loss weights: {{_multi_weights}} ({{len(_multi_weights)}} terms for {{len(_constraints)}} constraints)")
+{_gs_loss_weights_code(config)}
 {"print('Note: num_test disabled (left at None) because an Operator or Point Set Operator BC Value expression references X -- DeepXDE requires this whenever a boundary condition function uses the raw input points.')" if _bc_op_uses_X else ""}
 {"print('Note: Point Distribution was switched to uniform automatically because an Interface 2D boundary condition is active (DeepXDE requires evenly-spaced boundary points so Interface 2D BC can pair corresponding points correctly across its two edges).')" if _bc_forced_uniform else ""}
 
