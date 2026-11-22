@@ -2,6 +2,7 @@
 
     PINNStudio.exe [problem.pinn.json]          the window
     PINNStudio.exe script.py [args]             run a Python script inside the program
+    PINNStudio.exe --warm                       a process kept ready for the next run (pinnstudio.core.warm)
     PINNStudio.exe check|export|run ...         the command line (pinnstudio.main)
 
 The program holds its own Python, so it runs the training scripts PINNStudio writes itself:
@@ -116,6 +117,11 @@ if __name__ == "__main__":
     args = sys.argv[1:]
     if args and args[0].lower().endswith(".py"):
         run_script(args)
+    if args and args[0] == "--warm":
+        _close_splash()
+        from pinnstudio.core import warm as _warm
+        _warm.serve()                       # exits
+        raise SystemExit(0)
     if args and args[0] in COMMANDS:
         _close_splash()
         from pinnstudio import main as _main

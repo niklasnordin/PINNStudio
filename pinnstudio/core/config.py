@@ -9,6 +9,9 @@ from typing import List
 LBFGS_RECOMMENDED = dict(maxcor=100, ftol=0.0, gtol=1e-8, maxiter=15000, maxfun=18750, maxls=50)
 
 
+
+LOSS_BALANCING = ("none", "relobralo", "softadapt", "gradient")
+
 @dataclass
 class PINNConfig:
     save_dir: str = ""
@@ -472,6 +475,18 @@ class PINNConfig:
     # helped where the plain PINN struggles (1D Cahn-Hilliard, Allen-Cahn)
     # but made already-accurate problems (1D Burgers, Kovasznay) 2-10x worse.
     point_weights_lbfgs: str = "plain"
+    # Automatic balancing of the loss terms (each equation, condition and observation) during training, on top of
+    # the weights above, which stay the starting point (pinnstudio/core/codegen.py, _loss_balance_defs):
+    #   "relobralo": relative loss balancing with random lookback (Bischof & Kraus, 2021);
+    #   "softadapt": SoftAdapt (Heydari, Thompson & Mehmood, 2019), from the rate each loss falls;
+    #   "gradient":  from the size of each term's gradient (Wang, Wang, Bhartari & Perdikaris, 2023).
+    # Updated every balance_every Adam steps (0: the method's own default, 1 or 100 for "gradient"), held
+    # during L-BFGS. The defaults are NVIDIA Modulus' for ReLoBRaLo (temperature 1, alpha 0.95, rho 0.99).
+    loss_balancing: str = "none"
+    balance_every: int = 0
+    balance_temperature: float = 1.0
+    balance_alpha: float = 0.95
+    balance_rho: float = 0.99
 
     # Training Monitors: optional, pure-observability DeepXDE
     # dde.callbacks.OperatorPredictor instances. Each one watches an
@@ -1103,6 +1118,17 @@ class PINNConfig:
             errors.append("Per-point weights: during L-BFGS must be 'plain' or 'keep'.")
         if self.point_weights == "SA-PINN" and float(self.sa_lr) <= 0:
             errors.append("Per-point weights (SA-PINN): the learning rate must be positive.")
+        if self.loss_balancing not in LOSS_BALANCING:
+            errors.append(f"Loss balancing: unknown method {self.loss_balancing!r} ({', '.join(LOSS_BALANCING)}).")
+        elif self.loss_balancing != "none":
+            if int(self.balance_every) < 0:
+                errors.append("Loss balancing: 'every' must be 0 (the method's default) or a number of steps.")
+            if float(self.balance_temperature) <= 0:
+                errors.append("Loss balancing: the temperature must be positive.")
+            if not 0.0 <= float(self.balance_alpha) < 1.0:
+                errors.append("Loss balancing: alpha (the memory) must be at least 0 and below 1.")
+            if not 0.0 <= float(self.balance_rho) <= 1.0:
+                errors.append("Loss balancing: rho (the chance to keep the history) must be between 0 and 1.")
 
         if self.problem_dim == "ODE":
             _bad = [n.strip() for n in (self.output_names or "").split(",") if n.strip() in ("x", "t")]

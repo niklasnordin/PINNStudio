@@ -3,7 +3,7 @@
 The training loss is a weighted sum of terms: one per equation, one per boundary-condition row, one per
 initial condition and, in an inverse problem, one per measured-data file. The **Loss weights** page (under
 **Training** in the tree) sets these weights by hand, and offers automatic weighting: per-point weights,
-causal training, and scaling by the initial losses.
+causal training, scaling by the initial losses, and balancing the terms during training.
 
 ![The Loss weights page of a new 1D problem with two boundary-condition rows: Use same weights for all phases ticked, PDE 1 (u) 1, BC 1 (Dirichlet, u) 1, BC 2 (Neumann, u) 1, IC 1 (u) 100, and the Automatic weighting section with Per-point weights None, Causal training and Scale by initial losses unticked](../assets/screenshots/guide_weights_with_bcs.png){ .screenshot loading=lazy }
 
@@ -77,6 +77,27 @@ above are then greyed out and ignored, in every phase. It is not available with 
 The initial losses are measured with the first training phase's loss function, and with IC pre-training they
 are measured after pre-training, in both the Solve and the exported script.
 
+### Balance the terms during training
+
+**Balance the terms during training:** changes every term's weight while Adam trains, so that no term is left
+behind. The weights above stay the starting point and the balancing multiplies them. During L-BFGS the weights
+are held where Adam left them.
+
+| Method | How the weights move |
+|---|---|
+| **ReLoBRaLo** (Bischof & Kraus, 2021) | A term whose loss falls more slowly than the others, since the last update and since the start, gets more weight. The weights sum to the number of terms. |
+| **SoftAdapt** (Heydari, Thompson & Mehmood, 2019) | The same comparison with the last update only, and no memory. |
+| **Gradient norms** (Wang, Wang, Bhartari & Perdikaris, 2023) | Each term's weight makes its gradient as large as the sum of all the terms' gradients. This costs one extra backward pass per term at each update, so it updates every 100 steps. |
+
+**Update every (steps):** sets how often the weights change. **Default** means every step, or every 100 for
+gradient norms. **Temperature:**, **Memory α:** and **Lookback ρ:** are the methods' own settings. The
+defaults are NVIDIA Modulus' defaults for ReLoBRaLo (temperature 1, α 0.95, ρ 0.99).
+
+The Training Log prints the weights every 1000 steps, and the run saves them to
+`solution_results/loss_balance.txt`. The losses the log shows are the weighted ones. With time-adaptive
+training the balancing starts over in each window. It combines with **Scale by initial losses**, which then
+sets the starting weights.
+
 ## Weights and time windows
 
 With time-adaptive training, the first window has the terms above. From the second window on, each
@@ -101,3 +122,8 @@ takes that output's initial-condition weight (1 for an output without an initial
 | **Raise ε step by step (0.01 → 100)** | ε schedule | on | `causal_anneal` |
 | **Fixed ε:** | ε when the schedule is off | 1.0 | `causal_eps` |
 | **Scale by initial losses: …, c =** | Automatic weights c / Lᵢ(0) | off, c = 5 | `loss_weights_from_initial` (0 = off, else c) |
+| **Balance the terms during training:** | Off, ReLoBRaLo, SoftAdapt, Gradient norms | Off | `loss_balancing` (`none`, `relobralo`, `softadapt`, `gradient`) |
+| **Update every (steps):** | Steps between updates (0 = the method's default) | Default | `balance_every` |
+| **Temperature:** | ReLoBRaLo and SoftAdapt temperature | 1 | `balance_temperature` |
+| **Memory α:** | How much of the previous weights is kept | 0.95 | `balance_alpha` |
+| **Lookback ρ:** | ReLoBRaLo: chance of keeping the history | 0.99 | `balance_rho` |

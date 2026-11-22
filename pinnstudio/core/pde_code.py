@@ -722,10 +722,22 @@ DRY_RUN_MARK = "PINNSTUDIO_DRY_RUN "
 
 def dry_run_config(config):
     """The config Check runs as a dry run of the Solve script: one plain run (no time windows, no sweep, no
-    pre-training), on the CPU, saving nothing."""
+    pre-training), on the CPU, saving nothing, with at most a few thousand points (building them is most of a
+    check's time after the imports, and the shapes and errors do not depend on how many there are)."""
     import dataclasses
+
+    def cap(name, n):
+        v = getattr(config, name, None)
+        return min(int(v), n) if isinstance(v, (int, float)) and v else v
     return dataclasses.replace(config, time_adaptive=False, sweep_enabled=False, ic_pretrain=False,
-                               train_device="cpu", iterations=1, optimizer2="none")
+                               train_device="cpu", iterations=1, optimizer2="none",
+                               num_domain=cap("num_domain", CHECK_POINTS[0]),
+                               num_boundary=cap("num_boundary", CHECK_POINTS[1]),
+                               num_initial=cap("num_initial", CHECK_POINTS[1]),
+                               num_test=cap("num_test", CHECK_POINTS[1]))
+
+
+CHECK_POINTS = (2000, 500)      # Check: at most this many domain points, and boundary/initial/test points
 
 
 def parse_dry_run(out: str) -> dict:

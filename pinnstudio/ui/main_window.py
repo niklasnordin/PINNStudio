@@ -1199,6 +1199,16 @@ class MainWindow(QMainWindow):
         seed_settings_action.triggered.connect(self._on_seed_settings)
         settings_menu.addAction(seed_settings_action)
 
+        # a Python with PyTorch and DeepXDE imported, waiting for the next run (core/warm.py)
+        self.keep_ready_action = QAction("Keep Python Ready for Runs", self, checkable=True)
+        self.keep_ready_action.setToolTip("Keep a second Python waiting with PyTorch and DeepXDE loaded, so Solve, "
+                                          "sweeps and Check start seconds sooner (it uses some memory)")
+        from pinnstudio.ui.controllers.runs import RunsController
+        self.runs_ctl = RunsController(self._build_config, self)
+        self.keep_ready_action.setChecked(self.runs_ctl.keep_ready())
+        self.keep_ready_action.toggled.connect(self.runs_ctl.set_keep_ready)
+        settings_menu.addAction(self.keep_ready_action)
+
         # Training Callbacks used to live here as its own dialog; it's now
         # an inline section of the Training panel itself (see train_group's
         # construction in _build_ui), alongside IC Pre-Training/Training
@@ -2401,10 +2411,84 @@ class MainWindow(QMainWindow):
         H = max(self.right_splitter.height(), 400)
         self.right_splitter.setSizes([int(0.7 * H), H - int(0.7 * H)])
 
+    def _build_loss_balancing(self):
+        """Loss weights page: automatic balancing of the loss terms during training (config.loss_balancing)."""
+        box = QWidget()
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(4)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Balance the terms during training:"))
+        self.loss_balancing_combo = QComboBox()
+        for label, key in (("Off", "none"), ("ReLoBRaLo (relative, random lookback)", "relobralo"),
+                           ("SoftAdapt (from how fast each loss falls)", "softadapt"),
+                           ("Gradient norms (Wang et al. 2023)", "gradient")):
+            self.loss_balancing_combo.addItem(label, key)
+        self.loss_balancing_combo.setFixedHeight(28)
+        self.loss_balancing_combo.setToolTip(
+            "Changes every term's weight while Adam trains, so that no term (an equation, a boundary or\n"
+            "initial condition, measured data) is left behind. The weights above stay the starting point;\n"
+            "the balancing multiplies them. During L-BFGS the weights are held.\n"
+            "ReLoBRaLo: Bischof & Kraus (2021), 'Multi-objective loss balancing for physics-informed deep\n"
+            "learning'. A term whose loss falls more slowly than the others gets more weight.\n"
+            "SoftAdapt: Heydari, Thompson & Mehmood (2019). The same idea without memory.\n"
+            "Gradient norms: Wang, Wang, Bhartari & Perdikaris (2023), 'An expert's guide to training\n"
+            "physics-informed neural networks'. Each term's weight makes its gradient as large as the\n"
+            "sum of all of them. Costs one extra backward pass per term at each update (every 100 steps).\n"
+            "The weights are printed in the Training Log every 1000 steps and saved to\n"
+            "solution_results/loss_balance.txt.")
+        row.addWidget(self.loss_balancing_combo, 1)
+        lay.addLayout(row)
+        self.balance_widget = QWidget()
+        bz = QVBoxLayout(self.balance_widget)
+        bz.setSpacing(4)
+        bz.setContentsMargins(18, 0, 0, 0)
+
+        def num_row(label, spin, tip):
+            r = QHBoxLayout()
+            r.addWidget(QLabel(label))
+            spin.setFixedHeight(28)
+            spin.setFixedWidth(100)
+            spin.setToolTip(tip)
+            r.addWidget(spin)
+            r.addStretch()
+            bz.addLayout(r)
+        self.balance_every = QSpinBox()
+        self.balance_every.setRange(0, 1_000_000)
+        self.balance_every.setSpecialValueText("Default")
+        num_row("Update every (steps):", self.balance_every,
+                "How many Adam steps between updates. Default: every step, or every 100 for gradient norms.")
+        self.balance_temperature = SciSpinBox()
+        self.balance_temperature.setRange(1e-6, 1e6)
+        self.balance_temperature.setValue(1.0)
+        num_row("Temperature:", self.balance_temperature,
+                "ReLoBRaLo and SoftAdapt: smaller makes the weights react more strongly to the losses.")
+        self.balance_alpha = QDoubleSpinBox()
+        self.balance_alpha.setDecimals(4)
+        self.balance_alpha.setRange(0.0, 0.9999)
+        self.balance_alpha.setSingleStep(0.01)
+        self.balance_alpha.setValue(0.95)
+        num_row("Memory α:", self.balance_alpha,
+                "How much of the previous weights is kept at each update (ReLoBRaLo, gradient norms).")
+        self.balance_rho = QDoubleSpinBox()
+        self.balance_rho.setDecimals(4)
+        self.balance_rho.setRange(0.0, 1.0)
+        self.balance_rho.setSingleStep(0.01)
+        self.balance_rho.setValue(0.99)
+        num_row("Lookback ρ:", self.balance_rho,
+                "ReLoBRaLo: the chance of keeping the history at each update, rather than looking back to the "
+                "start of training.")
+        self.balance_widget.setVisible(False)
+        lay.addWidget(self.balance_widget)
+        self.loss_balancing_combo.currentIndexChanged.connect(
+            lambda _i: self.balance_widget.setVisible(self.loss_balancing_combo.currentData() != "none"))
+        return box
+
     def showEvent(self, ev):
         super().showEvent(ev)
         if not getattr(self, '_sized_once', False) and hasattr(self, 'main_splitter'):
             self._sized_once = True
+            self.runs_ctl.started()
             if not getattr(self, '_layout_restored', False):
                 QTimer.singleShot(0, self._apply_default_sizes)
 
@@ -4296,6 +4380,7 @@ class MainWindow(QMainWindow):
         _aw.addWidget(_pl_w)
         _aw.addWidget(_cl_w)
         _aw.addLayout(self._loss_w_init_row)
+        _aw.addWidget(self._build_loss_balancing())
         self.weights_group.layout().addWidget(self.auto_weights_box)
 
         def _num_row(lay, label, spin):
@@ -10709,6 +10794,11 @@ class MainWindow(QMainWindow):
             sa_lr=self.sa_lr.value(),
             sa_normalize=self.sa_normalize_cb.isChecked(),
             point_weights_lbfgs=self.pw_lbfgs_combo.currentData() or "plain",
+            loss_balancing=self.loss_balancing_combo.currentData() or "none",
+            balance_every=self.balance_every.value(),
+            balance_temperature=self.balance_temperature.value(),
+            balance_alpha=self.balance_alpha.value(),
+            balance_rho=self.balance_rho.value(),
             training_monitors_enabled=self.training_monitors_cb.isChecked(),
             training_monitors=self._build_training_monitors_json(),
             plot_colormap=self._plot_viz_settings.get('colormap', 'jet'),
@@ -11655,6 +11745,11 @@ class MainWindow(QMainWindow):
         self.sa_lr.setValue(float(getattr(config, 'sa_lr', 0.005)))
         self.sa_normalize_cb.setChecked(bool(getattr(config, 'sa_normalize', True)))
         self._set_combo_data(self.pw_lbfgs_combo, getattr(config, 'point_weights_lbfgs', 'plain') or 'plain')
+        self._set_combo_data(self.loss_balancing_combo, getattr(config, 'loss_balancing', 'none') or 'none')
+        self.balance_every.setValue(int(getattr(config, 'balance_every', 0) or 0))
+        self.balance_temperature.setValue(float(getattr(config, 'balance_temperature', 1.0)))
+        self.balance_alpha.setValue(float(getattr(config, 'balance_alpha', 0.95)))
+        self.balance_rho.setValue(float(getattr(config, 'balance_rho', 0.99)))
         self.training_monitors_cb.setChecked(getattr(config, 'training_monitors_enabled', False))
         self._apply_training_monitors_json(getattr(config, 'training_monitors', '') or '[]')
         # Auto-reveal the Training Callbacks group on load if this saved

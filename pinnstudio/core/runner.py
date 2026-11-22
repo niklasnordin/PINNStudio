@@ -1,7 +1,6 @@
 import os
 os.environ["DDE_BACKEND"] = "pytorch"
-from pinnstudio.core import pyexe as _pyexe
-import subprocess
+from pinnstudio.core import warm as _warm
 import tempfile
 import time
 from pinnstudio.core.codegen import generate_script
@@ -92,26 +91,18 @@ def run_pinn(config: PINNConfig, on_output=None, set_process=None, scratch=None)
         # Force the child process itself to use UTF-8 for its own stdout/stderr -
         # otherwise Windows defaults a piped (non-console) stream to the legacy
         # system codepage, which can't encode emoji/symbols the script prints.
-        _env = _pyexe.script_env()
+        _env = _warm.run_env(config)
         if scratch:          # the run's own scratch folder, where it puts plots when there is no save folder
             _env["PINNSTUDIO_SCRATCH"] = scratch
         try:
-            process = subprocess.Popen(
-                    [_pyexe.script_python(), tmp_path], creationflags=_pyexe.NO_WINDOW,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    encoding='utf-8',
-                    errors='replace',
-                    env=_env
-                )
+            # the Python kept ready (core/warm.py) when it fits this run, otherwise a new one
+            process = _warm.POOL.popen(tmp_path, _env)
         except OSError as e:
             # no Python interpreter at the configured path, or the script file locked: report it like
             # any other failed run (an exception here would end the QThread without its done signal)
             if on_output:
                 on_output(f"ERROR: could not start the training script: {e}")
             return "ERROR"
-        _pyexe.end_with_pinnstudio(process)   # Windows: it ends when PINNStudio ends
         if set_process:
             set_process(process)
 

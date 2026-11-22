@@ -2,18 +2,20 @@
 opened in the user's editor, checked by a dry run of the Solve script, and trusted before it runs.
 
 A controller: it changes the state (`PythonCodeState`), asks the user only through the `Prompter`, and runs
-the check in a second process (`QProcess`), so the code never runs inside the window.
+the check in a second process (core/warm.py: the Python kept ready, or a new one), so the code never runs inside the window.
 """
 from __future__ import annotations
 
 import os
 import shutil
 import tempfile
+import threading
 from typing import Callable
 
-from PySide6.QtCore import QFileSystemWatcher, QObject, QProcess, QProcessEnvironment, QTimer
+from PySide6.QtCore import QCoreApplication, QFileSystemWatcher, QObject, QTimer, Signal
 
 from pinnstudio.core import pde_code as PC
+from pinnstudio.core import warm
 from pinnstudio.core.netdesign import trust as T
 from pinnstudio.ui.controllers.prompter import Prompter
 from pinnstudio.ui.state.python_code_state import PythonCodeState
@@ -22,6 +24,8 @@ CHECK_TIMEOUT_MS = 300_000
 
 
 class PythonCodeController(QObject):
+    _output = Signal(object, str)          # (process, its output): from the reader thread
+
     def __init__(self, state: PythonCodeState, prompter: Prompter, config: Callable, parent=None):
         """`config()` gives the problem as the window has it now (a PINNConfig), with this code in it."""
         super().__init__(parent)
@@ -31,7 +35,9 @@ class PythonCodeController(QObject):
         self._watched = ""
         self._own = set()          # SHA-256 of code the user typed or wrote from the page in this session
         self._proc = None
+        self._reader = None
         self._check_dir = ""
+        self._output.connect(self._check_done)
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self._check_timed_out)
@@ -217,7 +223,8 @@ class PythonCodeController(QObject):
     def running(self) -> bool:
         return self._proc is not None
 
-    def check(self) -> bool:
+    def check(self, extra_env: dict | None = None) -> bool:
+        """Start a dry run of the Solve script in a second process. `extra_env` adds to its environment."""
         if self._proc is not None:
             return False
         cfg = self._config()
@@ -229,7 +236,6 @@ class PythonCodeController(QObject):
         if not self.check_trust():
             return False
         from pinnstudio.core import codegen as CG
-        from pinnstudio.core import pyexe
         import dataclasses
         self._check_dir = tempfile.mkdtemp(prefix="pinnstudio_check_")
         cfg = dataclasses.replace(PC.dry_run_config(cfg), save_dir=os.path.join(self._check_dir, "run"))
@@ -242,60 +248,62 @@ class PythonCodeController(QObject):
         path = os.path.join(self._check_dir, "check.py")
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(script)
-        env = QProcessEnvironment.systemEnvironment()
-        for k, v in dict(pyexe.script_env(), PINNSTUDIO_DRY_RUN="1", CUDA_VISIBLE_DEVICES="-1",
-                         MPLBACKEND="Agg", DDE_BACKEND="pytorch").items():
-            env.insert(k, str(v))
-        proc = QProcess(self)
-        proc.setProcessEnvironment(env)
-        proc.setWorkingDirectory(self._check_dir)
-        proc.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
-        proc.finished.connect(self._check_done)
-        proc.errorOccurred.connect(self._check_error)
+        env = warm.run_env(extra=dict(PINNSTUDIO_DRY_RUN="1", CUDA_VISIBLE_DEVICES="-1", MPLBACKEND="Agg",
+                                      DDE_BACKEND="pytorch", **(extra_env or {})))
+        try:
+            proc = warm.POOL.popen(path, env, cwd=self._check_dir)     # the Python kept ready, when it fits
+        except OSError:
+            self._clean_check_dir()
+            res = {"ok": False, "error": "the check could not start Python", "line": 0}
+            self.state.put_result(res)
+            self.state.put_message(_summary(res))
+            return False
         self._proc = proc
         self.state.put_result({})
         self.state.put_message("Checking: the Solve script runs once, without training…")
-        proc.start(pyexe.script_python(), [path])
+        self._reader = threading.Thread(target=self._read, args=(proc,), name="pinnstudio-check", daemon=True)
+        self._reader.start()
         self._timer.start(CHECK_TIMEOUT_MS)
         return True
 
+    def _read(self, proc):
+        """(A thread) the check's whole output, handed to the window's thread when the process ends."""
+        try:
+            out = proc.stdout.read()
+        except Exception as exc:
+            out = f"could not read the check's output: {exc}"
+        try:
+            proc.wait(10)
+        except Exception:
+            pass
+        self._output.emit(proc, out)
+
     def wait_for_check(self, ms: int = CHECK_TIMEOUT_MS) -> dict:
         """(Tests) wait for the running check and return its result."""
-        if self._proc is not None:
-            self._proc.waitForFinished(ms)
-            if self._proc is not None:
-                self._check_done()
+        if self._proc is not None and self._reader is not None:
+            self._reader.join(ms / 1000)
+            QCoreApplication.processEvents()
+            QCoreApplication.sendPostedEvents()
+            QCoreApplication.processEvents()
         return self.state.result
 
-    def _check_done(self, *_a):
-        proc, self._proc = self._proc, None
-        if proc is None:
+    def _check_done(self, proc, out: str):
+        if proc is not self._proc:                 # a check that timed out, or was replaced
             return
+        self._proc = None
         self._timer.stop()
-        out = bytes(proc.readAll()).decode("utf-8", errors="replace")
-        proc.deleteLater()
         self._clean_check_dir()
         res = PC.parse_dry_run(out)
         self.state.put_result(res)
         self.state.put_message(_summary(res))
 
-    def _check_error(self, err):
-        if err == QProcess.ProcessError.FailedToStart and self._proc is not None:
-            proc, self._proc = self._proc, None
-            self._timer.stop()
-            proc.deleteLater()
-            self._clean_check_dir()
-            res = {"ok": False, "error": "the check could not start Python", "line": 0}
-            self.state.put_result(res)
-            self.state.put_message(_summary(res))
-
     def _check_timed_out(self):
-        if self._proc is not None:
-            self._proc.kill()
-            self._proc.waitForFinished(5000)
-            proc, self._proc = self._proc, None
-            if proc is not None:
-                proc.deleteLater()
+        proc, self._proc = self._proc, None
+        if proc is not None:
+            try:
+                proc.kill()
+            except Exception:
+                pass
             self._clean_check_dir()
             res = {"ok": False, "error": f"the check took longer than {CHECK_TIMEOUT_MS // 1000} s", "line": 0}
             self.state.put_result(res)

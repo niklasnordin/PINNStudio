@@ -802,6 +802,11 @@ def _parse_inverse_obs_files(config):
 
 
 def _training_methods_defs(config):
+    """Module-level source for the training methods: causal training, per-point weights and loss balancing."""
+    return _point_methods_defs(config) + _loss_balance_defs(config)
+
+
+def _point_methods_defs(config):
     """Module-level source for causal training and per-point residual
     weights (empty when neither is on). Both wrap `pde` and scale each
     collocation point's residual, so the mean-squared PDE loss becomes the
@@ -1064,7 +1069,148 @@ def _training_methods_cbs(config, var_name, pad):
         lines.append(f"{pad}{var_name}.append(_CausalMonitor(1000))")
     if _point_weights_mode(config):
         lines.append(f"{pad}{var_name}.append(_PointWeights(1000))")
+    if _loss_balancing(config):
+        lines.append(f"{pad}{var_name}.append(_LossBalancer(1000))")
     return lines
+
+
+def _loss_balancing(config):
+    m = str(getattr(config, "loss_balancing", "none") or "none")
+    return m if m in ("relobralo", "softadapt", "gradient") else ""
+
+
+def _loss_balance_defs(config):
+    """Module-level source for automatic loss balancing (empty when it is off): a callback that sets
+    model.loss_weights = base * lambda every `every` Adam steps. `base` is the weights the phase was compiled
+    with (the Loss weights page, or from the initial losses); lambda comes from the method:
+
+      ReLoBRaLo (Bischof & Kraus, 2021): lambda = alpha*(rho*lambda + (1-rho)*bal(t, 0)) + (1-alpha)*bal(t, t-1),
+        bal(t, t') = m * softmax(L(t) / (T * L(t'))), rho a Bernoulli draw with mean rho;
+      SoftAdapt (Heydari, Thompson & Mehmood, 2019): lambda = bal(t, t-1);
+      gradient (Wang, Wang, Bhartari & Perdikaris, 2023): lambda_i <- alpha*lambda_i + (1-alpha)*sum_j|g_j|/|g_i|,
+        g_i the gradient of term i (unweighted) with respect to the network's parameters.
+
+    DeepXDE multiplies the losses by model.loss_weights on every step (deepxde/model.py), so a new list takes
+    effect on the next step. The unweighted losses come from the training data's losses_train, which DeepXDE
+    calls once per step. Held during L-BFGS (it needs a fixed objective); kept across phases; started over
+    when the number of terms changes (the next time window)."""
+    method = _loss_balancing(config)
+    if not method:
+        return ""
+    every = int(getattr(config, "balance_every", 0) or 0) or (100 if method == "gradient" else 1)
+    return f'''
+# ── Training methods: loss balancing ──────────────────────────
+_LB = {{"method": {method!r}, "every": {every}, "T": {float(config.balance_temperature)!r}, "alpha": {float(config.balance_alpha)!r},
+       "rho": {float(config.balance_rho)!r}, "lam": None, "L0": None, "Lprev": None, "last": None, "frozen": False,
+       "applied": None, "base": None, "rng": np.random.default_rng(12345), "hist": []}}
+
+
+def _lb_capture(model):
+    # the unweighted losses of each training step (DeepXDE calls data.losses_train once per step)
+    _data = model.data
+    if getattr(_data, "_lb_wrapped", False):
+        return
+    _orig = _data.losses_train
+
+    def _losses_train(*a, **k):
+        _l = _orig(*a, **k)
+        _LB["last"] = [_li.detach() for _li in (_l if isinstance(_l, (list, tuple)) else [_l])]
+        return _l
+    _data.losses_train = _losses_train
+    _data._lb_wrapped = True
+
+
+def _lb_bal(L, Lref, T):
+    _r = L / (T * Lref + 1e-12)
+    _e = np.exp(_r - _r.max())
+    return len(L) * _e / _e.sum()
+
+
+class _LossBalancer(dde.callbacks.Callback):
+    \"\"\"Sets the loss weights from the losses (or their gradients) every few Adam steps; holds them in L-BFGS.\"\"\"
+    def __init__(self, every=1000):
+        super().__init__()
+        self.every = every
+
+    def on_train_begin(self):
+        _m = self.model
+        _lb_capture(_m)
+        _LB["frozen"] = "L-BFGS" in str(getattr(_m, "opt_name", ""))
+        _w = _m.loss_weights
+        if _w is not _LB["applied"] or _LB["base"] is None:      # compiled again: its weights are the new base
+            _LB["base"] = [float(v) for v in _w] if _w is not None else None
+        if _LB["lam"] is not None and _LB["base"] is not None and len(_LB["lam"]) != len(_LB["base"]):
+            _LB["lam"], _LB["L0"], _LB["Lprev"] = None, None, None   # other terms (the next time window)
+        self._apply()
+
+    def _apply(self):
+        if _LB["lam"] is None:
+            return
+        _b = _LB["base"] or [1.0] * len(_LB["lam"])
+        _LB["applied"] = [float(b * l) for b, l in zip(_b, _LB["lam"])]
+        self.model.loss_weights = _LB["applied"]
+
+    def _grad_norms(self):
+        _m = self.model
+        _st = _m.train_state
+        _out = _m.outputs_losses_train(_st.X_train, _st.y_train, _st.train_aux_vars)[1]
+        _w = _m.loss_weights
+        _ps = [p for p in _m.net.parameters() if p.requires_grad]
+        _n = []
+        for _i in range(len(_out)):
+            _wi = float(_w[_i]) if _w is not None and _i < len(_w) else 1.0
+            _g = torch.autograd.grad(_out[_i] / (_wi if _wi else 1.0), _ps, retain_graph=True, allow_unused=True)
+            _n.append(float(torch.sqrt(sum((gi.detach() ** 2).sum() for gi in _g if gi is not None))))
+        return np.array(_n, dtype=float)
+
+    def on_batch_end(self):
+        _st = self.model.train_state
+        if not _LB["frozen"] and _st.step % _LB["every"] == 0:
+            self._update()
+        if _st.step % self.every == 0 and _LB["lam"] is not None:
+            _LB["hist"].append((int(_st.step), list(_LB["applied"] or [])))
+            print("  loss balancing (" + _LB["method"] + "): weights "
+                  + ", ".join(f"{{w:.3g}}" for w in (_LB["applied"] or []))
+                  + (" (held during L-BFGS)" if _LB["frozen"] else ""), flush=True)
+
+    def _update(self):
+        if _LB["method"] == "gradient":
+            _n = self._grad_norms()
+            _new = np.where(_n > 0, _n.sum() / np.maximum(_n, 1e-30), 1.0)
+            _lam = np.ones(len(_n)) if _LB["lam"] is None else np.asarray(_LB["lam"])
+            _LB["lam"] = list(_LB["alpha"] * _lam + (1 - _LB["alpha"]) * _new)
+        else:
+            if not _LB["last"]:
+                return
+            L = np.array([float(v) for v in _LB["last"]], dtype=float)
+            if _LB["L0"] is None or len(_LB["L0"]) != len(L):
+                _LB["L0"], _LB["Lprev"], _LB["lam"] = L, L, [1.0] * len(L)
+                return
+            _prev = _lb_bal(L, _LB["Lprev"], _LB["T"])
+            if _LB["method"] == "softadapt":
+                _LB["lam"] = list(_prev)
+            else:
+                _rho = float(_LB["rng"].random() < _LB["rho"])
+                _hist = _rho * np.asarray(_LB["lam"]) + (1 - _rho) * _lb_bal(L, _LB["L0"], _LB["T"])
+                _LB["lam"] = list(_LB["alpha"] * _hist + (1 - _LB["alpha"]) * _prev)
+            _LB["Lprev"] = L
+        self._apply()
+
+    def on_train_end(self):
+        _d = globals().get("_sol_dir")
+        if not _LB["hist"] or not _d or not os.path.isdir(_d):
+            return
+        try:
+            with open(os.path.join(_d, "loss_balance.txt"), "w") as _fh:
+                _fh.write("# step, the loss weights (" + _LB["method"] + ")\\n")
+                for _s, _w in _LB["hist"]:
+                    _fh.write(str(_s) + "," + ",".join(repr(v) for v in _w) + "\\n")
+        except OSError:
+            pass
+
+
+print(f"Loss balancing: {{_LB['method']}}, every {{_LB['every']}} steps")
+'''
 
 
 def _build_train_cbs_code(config, var_name="_train_cbs", indent=4, sol_dir_var="_sol_dir",

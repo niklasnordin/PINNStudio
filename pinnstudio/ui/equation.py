@@ -7,6 +7,7 @@ uses a name that is neither an output, a derivative of one, a coordinate,
 a constant, an inverse variable nor a math function.
 """
 import ast
+import os
 import re
 
 from PySide6.QtCore import Qt, QTimer
@@ -146,8 +147,45 @@ def unknown_names(expr, known):
     return bad
 
 
+_CACHE = {}
+_CACHE_FORMAT = 1         # raise when the images change
+
+
+def _cache_file(key: str) -> str:
+    import hashlib
+    h = hashlib.sha256(f"{_CACHE_FORMAT}|{key}".encode("utf-8")).hexdigest()[:32]
+    home = os.environ.get("PINNSTUDIO_HOME") or os.path.join(os.path.expanduser("~"), ".pinnstudio")
+    return os.path.join(home, "cache", "equations", h + ".png")
+
+
 def render(latex, color="#1f2328", size=22):
-    """LaTeX (matplotlib mathtext) -> QPixmap, or None."""
+    """LaTeX (matplotlib mathtext) -> QPixmap, or None. Kept in memory and on disk
+    (~/.pinnstudio/cache/equations), so a start with the same equations does not load matplotlib at all."""
+    key = f"{latex}|{color}|{size}"
+    pm = _CACHE.get(key)
+    if pm is not None:
+        return pm
+    path = _cache_file(key)
+    if os.path.isfile(path):
+        pm = QPixmap(path)
+        if not pm.isNull():
+            pm.setDevicePixelRatio(2.0)
+            _CACHE[key] = pm
+            return pm
+    pm = _render(latex, color, size)
+    if pm is not None:
+        _CACHE[key] = pm
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            tmp = path + ".tmp"
+            if pm.save(tmp, "PNG"):
+                os.replace(tmp, path)
+        except OSError:
+            pass
+    return pm
+
+
+def _render(latex, color, size):
     try:
         from matplotlib.figure import Figure
         from matplotlib.backends.backend_agg import FigureCanvasAgg
