@@ -38,6 +38,10 @@ class PythonCodeController(QObject):
         self._reader = None
         self._check_dir = ""
         self._output.connect(self._check_done)
+        # () -> (key, [midpoint, ...]) or None: the Sketch and Geometry views' edges, which Check reports the
+        # Python conditions on (set by the window)
+        self.edges = None
+        self._pending_edges = (None, [])
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self._check_timed_out)
@@ -271,8 +275,17 @@ class PythonCodeController(QObject):
         path = os.path.join(self._check_dir, "check.py")
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(script)
+        extra = dict(extra_env or {})
+        self._pending_edges = (None, [])
+        edges = self._edges_now() if cfg.conditions_mode == "python" else None
+        if edges and edges[1]:
+            import numpy as np
+            epath = os.path.join(self._check_dir, "edges.npy")
+            np.save(epath, np.asarray(edges[1], dtype=float))
+            extra["PINNSTUDIO_DRY_RUN_EDGES"] = epath
+            self._pending_edges = edges
         env = warm.run_env(extra=dict(PINNSTUDIO_DRY_RUN="1", CUDA_VISIBLE_DEVICES="-1", MPLBACKEND="Agg",
-                                      DDE_BACKEND="pytorch", **(extra_env or {})))
+                                      DDE_BACKEND="pytorch", **extra))
         try:
             proc = warm.POOL.popen(path, env, cwd=self._check_dir)     # the Python kept ready, when it fits
         except OSError:
@@ -317,8 +330,22 @@ class PythonCodeController(QObject):
         self._timer.stop()
         self._clean_check_dir()
         res = PC.parse_dry_run(out)
-        self.state.put_result(res)
+        key, pts = self._pending_edges
+        if res.get("edges") is not None and key is not None:
+            self.state.put_result(res, edge_key=key, edge_points=pts)
+        else:
+            self.state.put_result(res, edge_key=None)
         self.state.put_message(_summary(res))
+
+    def _edges_now(self):
+        try:
+            return self.edges() if self.edges else None
+        except Exception:
+            return None
+
+    def edges_current(self, key) -> bool:
+        """The last Check's edge result is for this key (the code, the shapes and the domain as they are now)."""
+        return key is not None and self.state.edge_key == key and self.state.result.get("edges") is not None
 
     def _check_timed_out(self):
         proc, self._proc = self._proc, None

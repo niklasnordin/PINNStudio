@@ -37,7 +37,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QCheckBox, QComb
                              QLabel, QLineEdit, QListWidget, QListWidgetItem, QPushButton, QSizePolicy, QStackedWidget,
                              QVBoxLayout, QWidget)
 
-from pinnstudio.ui.sketch_edges import boundary_edges, in_region, join_where, where_matches
+from pinnstudio.ui.sketch_edges import boundary_edges, in_region, join_where, mid_key, where_matches
 from pinnstudio.ui import sketch3d as s3
 
 TOOLS = ("Select", "Rectangle", "Circle", "Ellipse", "Polygon", "Edges")
@@ -292,15 +292,18 @@ class _Canvas(QWidget):
         edges = self.edges()
         rows = self.owner.bc_rows()
         dom = self.owner.domain()
-        key = (self._edges_key, tuple((b["index"], b["expr"]) for b in rows), tuple(sorted(dom.items())))
+        key = (self._edges_key, tuple((b["index"], b.get("expr"), b.get("match")) for b in rows),
+               tuple(sorted(dom.items())))
         if key != self._bc_key:
             self._bc_key = key
-            if self.dim == 2:
-                self._bc_of = [[b["index"] for b in rows if where_matches(b["expr"], e["mid"][0], e["mid"][1], dom)]
-                               for e in edges]
-            else:
-                self._bc_of = [[b["index"] for b in rows if s3.where_matches3(b["expr"], e["mid"], dom)]
-                               for e in edges]
+
+            def picks(b, e):
+                if b.get("match") is not None:          # the Python conditions: which edges the last Check found
+                    return mid_key(e["mid"]) in b["match"]
+                if self.dim == 2:
+                    return where_matches(b["expr"], e["mid"][0], e["mid"][1], dom)
+                return s3.where_matches3(b["expr"], e["mid"], dom)
+            self._bc_of = [[b["index"] for b in rows if picks(b, e)] for e in edges]
         return self._bc_of
 
     def _edge_at(self, q, px=8.0):
@@ -365,7 +368,7 @@ class _Canvas(QWidget):
         used = {i for lst in bc_of for i in lst}
         items = [(QColor(bc_color(b["index"])), b["label"]) for b in rows if b["index"] in used]
         if any(not lst for lst in bc_of):
-            items.append((QColor(NO_BC_COLOR), "no BC yet"))
+            items.append((QColor(NO_BC_COLOR), self.owner.bc_note() or "no BC yet"))
         if items:
             f.setBold(False)
             f.setPointSizeF(9.5)
@@ -1304,11 +1307,20 @@ class SketchPanel(QWidget):
         self.canvas.update()
 
     # ── Edges → BCs ──────────────────────────────────────────
-    def set_bc_provider(self, rows_fn, domain_fn):
+    def set_bc_provider(self, rows_fn, domain_fn, note_fn=None):
         """rows_fn() -> [{"index", "label", "expr"}] for the BC rows that have
-        a Where:; domain_fn() -> {"x_min": .., ...} for the names Where: can use."""
+        a Where: (or {"index", "label", "match": a set of mid_key(edge midpoint)} for conditions placed by a
+        check); domain_fn() -> {"x_min": .., ...} for the names Where: can use; note_fn() -> the legend's
+        text for edges with no condition (default "no BC yet")."""
         self._bc_rows_fn = rows_fn
         self._domain_fn = domain_fn
+        self._bc_note_fn = note_fn
+
+    def bc_note(self) -> str:
+        try:
+            return (self._bc_note_fn() if getattr(self, "_bc_note_fn", None) else "") or ""
+        except Exception:
+            return ""
 
     def bc_rows(self):
         try:
@@ -1365,7 +1377,7 @@ class SketchPanel(QWidget):
         self.add_to_combo.blockSignals(True)
         self.add_to_combo.clear()
         for b in self.bc_rows():
-            if b.get("exact"):
+            if b.get("exact") or b.get("match") is not None:      # not a row (exact, or the Python code's)
                 continue
             self.add_to_combo.addItem(b["label"], b["index"])
         i = self.add_to_combo.findData(cur)

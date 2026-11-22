@@ -25,6 +25,8 @@ class PythonCodeState(QObject):
         self._conditions_mode = "rows"
         self._from_outside = False
         self._result = {}
+        self._edge_key = None        # what the last Check's edge result was for (the window's key)
+        self._edge_points = []       # the edge midpoints it was given, in the order of result["edges"]
 
     # ── queries ────────────────────────────────────────────────────
     @property
@@ -46,6 +48,14 @@ class PythonCodeState(QObject):
     @property
     def result(self) -> dict:
         return dict(self._result)
+
+    @property
+    def edge_key(self):
+        return self._edge_key
+
+    @property
+    def edge_points(self) -> list:
+        return list(self._edge_points)
 
     def uses_code(self) -> bool:
         """The Solve script runs the code: a mode is Python, or the code defines a hook (pde_code.HOOKS)."""
@@ -70,8 +80,12 @@ class PythonCodeState(QObject):
             self._pde_mode, self._conditions_mode = new_p, new_c
             self.modes_changed.emit()
 
-    def put_result(self, result: dict):
+    def put_result(self, result: dict, edge_key=None, edge_points=None):
+        """The last Check's result; with `edge_key`, the edge midpoints it was given (result["edges"] says
+        which of them each condition applies to)."""
         self._result = dict(result or {})
+        if edge_key is not None or not result:
+            self._edge_key, self._edge_points = edge_key, [list(p) for p in (edge_points or [])]
         self.checked.emit(dict(self._result))
 
     def put_message(self, text: str):

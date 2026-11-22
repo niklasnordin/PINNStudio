@@ -142,6 +142,12 @@ of each term and the hooks used. An error shows its line, marked in the editor. 
 points and 500 boundary and initial points, and the Python kept ready for runs when there is one
 (**Settings › Keep Python Ready for Runs**).
 
+With the conditions in Python, Check also finds where each boundary condition applies on the edges (faces in
+3D) of the Sketch and Geometry views, and the views colour them, with the condition's name in the legend. An
+edit to the code, the shape or the domain greys them until the next Check. A periodic condition shows the side
+its `where` picks.
+For a time-dependent problem the edges are tested at the start time.
+
 ## Files and your own editor
 
 - **File › Load .py…** and **Save .py…** read and write the module.

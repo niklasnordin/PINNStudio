@@ -622,6 +622,12 @@ def where_matches(expr, x, y, domain=None):
         return False
 
 
+def mid_key(p):
+    """An edge midpoint as a key, the same in the window and the view (rounded, so a value read back from a
+    check's file still matches)."""
+    return tuple(round(float(v), 7) for v in p)
+
+
 def join_where(exprs):
     """Several edges' expressions as one "Where:" ("(...) or (...)")."""
     exprs = [e for e in exprs if e]

@@ -419,7 +419,7 @@ class Domain3DView(QWidget):
         handles = [Patch(facecolor=bc_color(b["index"]), label=b["label"])
                    for b in rows if b["index"] in used]
         if any(not lst for lst in bc_of):
-            handles.append(Patch(facecolor=NO_BC_COLOR, label="no BC yet"))
+            handles.append(Patch(facecolor=NO_BC_COLOR, label=c.owner.bc_note() or "no BC yet"))
         if n_inner or n_bnd:
             from matplotlib.lines import Line2D
             sfx = f", {pts_label}" if pts_label else ""

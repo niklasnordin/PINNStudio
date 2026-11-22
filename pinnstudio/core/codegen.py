@@ -5505,11 +5505,42 @@ def _small_problem_gpu_tip(config):
             '          "Settings -> GPU / Hardware -> Train on: CPU.")\n')
 
 
+_DRY_RUN_EDGES = '''def _dry_run_edges():
+    # PINNSTUDIO_DRY_RUN_EDGES (the Python code page's Check): a .npy file of points on the boundary, the
+    # Sketch and Geometry views' edge midpoints. For each condition of conditions(c), in the order of its
+    # names, the indices of the points it applies to (None for a condition with no place: points, initial)
+    _path = os.environ.get("PINNSTUDIO_DRY_RUN_EDGES")
+    if not _path or not _PY_CONDITIONS:
+        return None
+    try:
+        _E = np.asarray(np.load(_path), dtype=float)
+        if hasattr(geomtime, "timedomain"):            # at the start time
+            _E = np.hstack([_E, np.full((len(_E), 1), float(geomtime.timedomain.t0))])
+        _on = geomtime.on_boundary(_E)
+        _out = []
+        for _it in [i for i in _py_cond.items if i[0] == "bc"] + [i for i in _py_cond.items if i[0] == "ic"]:
+            _f = getattr(_it[1], "on_boundary", None) if _it[0] == "bc" else None
+            if _f is None:
+                _out.append(None)
+                continue
+            try:                                       # DeepXDE's on_boundary takes all the points at once
+                _m = np.asarray(_f(_E, _on), dtype=bool).reshape(-1)
+                _out.append([int(_k) for _k in np.nonzero(_m)[0]])
+            except Exception:
+                _out.append(None)
+        return _out
+    except Exception:
+        return None
+
+
+'''
+
+
 def _dry_run_code():
     """_dry_run(model, data, net) in the Solve script: with PINNSTUDIO_DRY_RUN set (the Python code page's
     Check, and the tests) the script evaluates the equations on 64 training points and the initial loss of
     every term, prints one JSON line (pde_code.parse_dry_run reads it) and stops, training nothing."""
-    return 'def _dry_run(model, data, net):\n    # PINNSTUDIO_DRY_RUN (the Python code page\'s Check, and the tests): the equations on 64 training points,\n    # the initial loss of every term, then stop -- one JSON line, nothing trained or saved\n    import json as _dr_json\n    import traceback as _dr_tb\n    try:\n        if "_frac_apply" in globals():\n            _dr_r = []          # fractional: the residual needs the training points\' matrix; the losses show it\n        else:\n            _dr_x = torch.as_tensor(np.asarray(data.train_x[:64])).requires_grad_(True)\n            dde.grad.clear()\n            _dr_r = pde(_dr_x, net(_dr_x))\n            _dr_r = _dr_r if isinstance(_dr_r, (list, tuple)) else [_dr_r]\n        model.train(iterations=0, display_every=1, verbose=0)\n        _dr_l = [float(_v) for _v in np.ravel(model.losshistory.loss_train[-1])]\n        _dr_names = (_py_cond.names() if _PY_CONDITIONS\n                     else [f"row {_i + 1}" for _i in range(len(_constraints))])\n        print("PINNSTUDIO_DRY_RUN " + _dr_json.dumps({"ok": True, "residuals": [list(_r.shape) for _r in _dr_r],\n                                                      "conditions": _dr_names, "losses": _dr_l,\n                                                      "hooks": [_h for _h in ("output_transform", "feature_transform", "points", "callbacks") if _h in globals().get("_PDE_NS", {})]}), flush=True)\n    except BaseException as _dr_e:\n        _dr_line = 0\n        for _fr in _dr_tb.extract_tb(_dr_e.__traceback__):\n            if _fr.filename == "<equations>":\n                _dr_line = _fr.lineno\n        print("PINNSTUDIO_DRY_RUN " + _dr_json.dumps({"ok": False, "error": f"{type(_dr_e).__name__}: {_dr_e}",\n                                                      "line": _dr_line}), flush=True)\n    raise SystemExit(0)\n'
+    return _DRY_RUN_EDGES + 'def _dry_run(model, data, net):\n    # PINNSTUDIO_DRY_RUN (the Python code page\'s Check, and the tests): the equations on 64 training points,\n    # the initial loss of every term, then stop -- one JSON line, nothing trained or saved\n    import json as _dr_json\n    import traceback as _dr_tb\n    try:\n        if "_frac_apply" in globals():\n            _dr_r = []          # fractional: the residual needs the training points\' matrix; the losses show it\n        else:\n            _dr_x = torch.as_tensor(np.asarray(data.train_x[:64])).requires_grad_(True)\n            dde.grad.clear()\n            _dr_r = pde(_dr_x, net(_dr_x))\n            _dr_r = _dr_r if isinstance(_dr_r, (list, tuple)) else [_dr_r]\n        model.train(iterations=0, display_every=1, verbose=0)\n        _dr_l = [float(_v) for _v in np.ravel(model.losshistory.loss_train[-1])]\n        _dr_names = (_py_cond.names() if _PY_CONDITIONS\n                     else [f"row {_i + 1}" for _i in range(len(_constraints))])\n        print("PINNSTUDIO_DRY_RUN " + _dr_json.dumps({"ok": True, "residuals": [list(_r.shape) for _r in _dr_r],\n                                                      "conditions": _dr_names, "losses": _dr_l,\n                                                      "hooks": [_h for _h in ("output_transform", "feature_transform", "points", "callbacks") if _h in globals().get("_PDE_NS", {})],\n                                                      "edges": _dry_run_edges()}), flush=True)\n    except BaseException as _dr_e:\n        _dr_line = 0\n        for _fr in _dr_tb.extract_tb(_dr_e.__traceback__):\n            if _fr.filename == "<equations>":\n                _dr_line = _fr.lineno\n        print("PINNSTUDIO_DRY_RUN " + _dr_json.dumps({"ok": False, "error": f"{type(_dr_e).__name__}: {_dr_e}",\n                                                      "line": _dr_line}), flush=True)\n    raise SystemExit(0)\n'
 
 
 def _gs_loss_weights_code(config):

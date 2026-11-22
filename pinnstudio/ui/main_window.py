@@ -5290,7 +5290,7 @@ class MainWindow(QMainWindow):
         self.sketch_panel = SketchPanel()
         self.sketch_panel.use_window_shortcuts()
         self.sketch_panel.shapes_edited.connect(self._on_sketch_edited)
-        self.sketch_panel.set_bc_provider(self._sketch_bc_rows, self._sketch_domain)
+        self.sketch_panel.set_bc_provider(self._sketch_bc_rows, self._sketch_domain, self._sketch_bc_note)
         self._hook_view3d_points(self.sketch_panel)
         self.sketch_panel.new_bc_requested.connect(self._on_sketch_new_bc)
         self.sketch_panel.add_to_bc_requested.connect(self._on_sketch_add_to_bc)
@@ -5334,7 +5334,7 @@ class MainWindow(QMainWindow):
         self.domain_view = SketchPanel()
         self.domain_view.make_viewer()
         self.domain_view.use_window_shortcuts()       # Edit › Undo / Redo reach it (see _undo_target)
-        self.domain_view.set_bc_provider(self._sketch_bc_rows, self._sketch_domain)
+        self.domain_view.set_bc_provider(self._sketch_bc_rows, self._sketch_domain, self._sketch_bc_note)
         self._hook_view3d_points(self.domain_view)
         self.domain_view.new_bc_requested.connect(self._on_sketch_new_bc)
         self.domain_view.add_to_bc_requested.connect(self._on_sketch_add_to_bc)
@@ -7067,8 +7067,77 @@ class MainWindow(QMainWindow):
     # ── Sketch: edges -> Boundary Conditions rows ──────────────
     _SKETCH_NO_WHERE_TYPES = ("pointset", "pointset_operator")
 
+    def _python_conditions_on(self) -> bool:
+        return hasattr(self, "python_state") and self.python_state.conditions_mode == "python"
+
+    def _python_edge_points(self):
+        """The edge (face) midpoints of the Sketch and Geometry views, in one list without repeats."""
+        from pinnstudio.ui.sketch_edges import mid_key
+        pts, seen = [], set()
+        for panel in (getattr(self, "domain_view", None), getattr(self, "sketch_panel", None)):
+            canvas = getattr(panel, "canvas", None)
+            if canvas is None or not canvas.shapes:
+                continue
+            try:
+                edges = canvas.edges()
+            except Exception:
+                continue
+            for e in edges:
+                k = mid_key(e["mid"])
+                if k not in seen:
+                    seen.add(k)
+                    pts.append(list(k))
+        return pts
+
+    def _python_edge_key(self, pts=None):
+        """What a Check's edge result depends on: the code, the edges and the domain's limits and constants."""
+        import hashlib
+        pts = self._python_edge_points() if pts is None else pts
+        if not pts:
+            return None
+        h = hashlib.sha256(self.python_state.code.encode("utf-8")).hexdigest()
+        return (h, tuple(tuple(p) for p in pts), tuple(sorted(self._sketch_domain().items())))
+
+    def _python_check_edges(self):
+        """(key, midpoints) for the Python code page's Check, or None when no view has a domain."""
+        if not self._python_conditions_on() or not hasattr(self, "python_state"):
+            return None
+        pts = self._python_edge_points()
+        key = self._python_edge_key(pts)
+        return (key, pts) if key else None
+
+    def _sketch_bc_note(self):
+        if not self._python_conditions_on():
+            return ""
+        if self.python_code.edges_current(self._python_edge_key()):
+            return "no condition (from the last Check)"
+        return "conditions in Python: press Check on the Python code page to show them"
+
+    def _python_sketch_rows(self):
+        """With the conditions in Python: one row per condition the last Check found on the views' edges,
+        while that Check is for the code, the edges and the domain as they are now."""
+        from pinnstudio.ui.sketch_edges import mid_key
+        st = self.python_state
+        if not self.python_code.edges_current(self._python_edge_key()):
+            return []
+        res = st.result
+        names, hits, pts = res.get("conditions") or [], res.get("edges") or [], st.edge_points
+        rows = []
+        for i, (name, hit) in enumerate(zip(names, hits)):
+            if hit is None:
+                continue
+            rows.append({"index": i, "label": f"{name} (Python code)",
+                         "match": frozenset(mid_key(pts[k]) for k in hit if 0 <= k < len(pts))})
+        return rows
+
     def _sketch_bc_rows(self):
-        """The BC rows the sketch can colour edges by (those with a Where:)."""
+        """The BC rows the sketch can colour edges by (those with a Where:), or the Python conditions."""
+        if self._python_conditions_on():
+            rows = self._python_sketch_rows()
+            exact = self._sketch_exact_where()
+            if exact:
+                rows.append({"index": EXACT_BC_INDEX, "label": exact[0], "expr": exact[1], "exact": True})
+            return rows
         rows = []
         for i, e in enumerate(getattr(self, 'custom_bc_list', [])):
             if e['type'].currentData() in self._SKETCH_NO_WHERE_TYPES:
@@ -9075,6 +9144,10 @@ class MainWindow(QMainWindow):
             .replace(".pinn", "") or "problem")
         gl.addWidget(self.python_page)
         left_layout.addWidget(group)
+        # Check also finds where the Python conditions apply on the Sketch and Geometry views' edges
+        self.python_code.edges = self._python_check_edges
+        for sig in (self.python_state.checked, self.python_state.code_changed, self.python_state.modes_changed):
+            sig.connect(lambda *_a: self._sketch_bcs_changed())
 
         def mode_row(label, choices, tip):
             row = QHBoxLayout()
@@ -9109,8 +9182,8 @@ class MainWindow(QMainWindow):
                 "Python code page, for both (the rows are kept).")
             gl2.addLayout(row)
             note = QLabel("The boundary and initial conditions come from conditions(c) on the Python code page, "
-                          "with their loss weights; the rows below are kept but not used, and the Sketch and "
-                          "Geometry views still show the rows.")
+                          "with their loss weights; the rows below are kept but not used. The Sketch and "
+                          "Geometry views show where the conditions apply after Check on the Python code page.")
             note.setWordWrap(True)
             note.setObjectName("pageDesc")
             gl2.addWidget(note)
