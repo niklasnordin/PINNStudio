@@ -9,6 +9,9 @@ rem PYTHON  the Python 3.12 to build with (default: py -3.12, else %LOCALAPPDATA
 rem ISCC    Inno Setup's compiler (default: where winget or its installer puts it)
 rem PINNSTUDIO_INSTALL_CHECK=1  also install the setup.exe silently into build\, start the installed program
 rem                             off screen and uninstall it again
+rem PINNSTUDIO_GPU=1            the GPU build: PyTorch's CUDA build (PINNSTUDIO_GPU_INDEX, default cu132, the
+rem                             one PyTorch 2.15 has for Windows: an NVIDIA driver with CUDA 13), in a venv of
+rem                             its own, as PINNStudio-VERSION-gpu-setup.exe (with .bin files beside it)
 rem
 rem The libraries are pinned to constraints.txt (the versions the tests passed with); PyTorch is the CPU build.
 setlocal
@@ -22,6 +25,19 @@ set "TMP=%TEMP%"
 if not exist "%TEMP%" mkdir "%TEMP%"
 if not defined PIP_CACHE_DIR set "PIP_CACHE_DIR=%CD%\build\windows\pip-cache"
 set VENV=build\windows\venv
+set WORK=build\windows\work
+set TORCH_INDEX=https://download.pytorch.org/whl/cpu
+set FLAVOUR=
+set ISCC_GPU=
+if "%PINNSTUDIO_GPU%"=="1" (
+  if not defined PINNSTUDIO_GPU_INDEX set PINNSTUDIO_GPU_INDEX=cu132
+  set VENV=build\windows\venv-gpu
+  set WORK=build\windows\work-gpu
+  set FLAVOUR=-gpu
+  set ISCC_GPU=/DGpu=1
+  set PINNSTUDIO_EXPECT_CUDA=1
+)
+if "%PINNSTUDIO_GPU%"=="1" set "TORCH_INDEX=https://download.pytorch.org/whl/%PINNSTUDIO_GPU_INDEX%"
 set PY=%VENV%\Scripts\python.exe
 set PIP=%PY% -m pip --disable-pip-version-check -q
 set DIST=dist\PINNStudio
@@ -36,15 +52,15 @@ if not exist %PY% (
 )
 echo [1/5] Libraries
 %PIP% install --upgrade pip || exit /b 1
-rem PyTorch's CPU build first, from PyTorch's own index; pip then keeps it for PINNStudio
-%PIP% install %CONSTRAINTS% torch --index-url https://download.pytorch.org/whl/cpu || exit /b 1
+rem PyTorch's CPU build (or the CUDA build) first, from PyTorch's own index; pip then keeps it for PINNStudio
+%PIP% install %CONSTRAINTS% torch --index-url %TORCH_INDEX% || exit /b 1
 %PIP% install %CONSTRAINTS% . "pyinstaller>=6.10,<7" || exit /b 1
 rem pip keeps an installed pinnstudio of the same version: a reused venv would bundle the old source
 %PIP% install --force-reinstall --no-deps . || exit /b 1
 
 echo [2/5] PyInstaller
 rem --clean removes the last dist\PINNStudio, which fails while that program runs: close it first
-%PY% -m PyInstaller --noconfirm --clean --log-level=WARN --workpath build\windows\work --distpath dist ^
+%PY% -m PyInstaller --noconfirm --clean --log-level=WARN --workpath %WORK% --distpath dist ^
   packaging\windows\pinnstudio.spec || exit /b 1
 
 rem the checks show no splash screen and no window
@@ -82,12 +98,12 @@ if not defined ISCC (
 )
 %PY% -c "import pinnstudio; print(pinnstudio.__version__)" > build\windows\version.txt || exit /b 1
 set /p VERSION=<build\windows\version.txt
-set SETUP=dist\PINNStudio-%VERSION%-setup.exe
+set SETUP=dist\PINNStudio-%VERSION%%FLAVOUR%-setup.exe
 rem up to three tries: a virus scanner can hold the new setup.exe while ISCC writes its resources
 set TRIES=0
 :compile
 set /a TRIES+=1
-"%ISCC%" /Q /DAppVersion=%VERSION% packaging\windows\pinnstudio.iss && goto compiled
+"%ISCC%" /Q /DAppVersion=%VERSION% %ISCC_GPU% packaging\windows\pinnstudio.iss && goto compiled
 if %TRIES% geq 3 exit /b 1
 echo ISCC failed: trying again in 10 s
 ping -n 11 127.0.0.1 >nul
@@ -97,7 +113,9 @@ rem its SHA-256 as sha256sum writes it (certutil's lines with a colon are its he
 certutil -hashfile %SETUP% SHA256 | findstr /v ":" > build\windows\hash.txt || exit /b 1
 set /p HASH=<build\windows\hash.txt
 set "HASH=%HASH: =%"
-(echo %HASH%  PINNStudio-%VERSION%-setup.exe)> %SETUP%.sha256
+(echo %HASH%  PINNStudio-%VERSION%%FLAVOUR%-setup.exe)> %SETUP%.sha256
+rem the GPU build's .bin files, each with its SHA-256 too
+for %%B in (dist\PINNStudio-%VERSION%%FLAVOUR%-setup-*.bin) do call :hashfile "%%B" || exit /b 1
 echo %CD%\%SETUP%
 type %SETUP%.sha256
 if not "%PINNSTUDIO_INSTALL_CHECK%"=="1" exit /b 0
@@ -147,3 +165,12 @@ if not "%RC%"=="0" (
 )
 findstr /c:"launch check passed" build\windows\installed.log || exit /b 1
 echo install check passed: installed, started, uninstalled (in %WAITED% s)
+exit /b 0
+
+rem the SHA-256 of the file %1, written to %1.sha256 as sha256sum writes it
+:hashfile
+certutil -hashfile %1 SHA256 | findstr /v ":" > build\windows\hash.txt || exit /b 1
+set /p BHASH=<build\windows\hash.txt
+set "BHASH=%BHASH: =%"
+(echo %BHASH%  %~nx1)> "%~1.sha256"
+exit /b 0

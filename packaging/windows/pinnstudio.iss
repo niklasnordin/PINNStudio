@@ -1,6 +1,7 @@
 ; PINNStudio for Windows as an installer (Inno Setup 6): the folder PyInstaller made, dist\PINNStudio\.
 ;
 ;   ISCC /DAppVersion=1.6.0 packaging\windows\pinnstudio.iss       (build_windows.bat runs it)
+;   ISCC /DAppVersion=1.6.0 /DGpu=1 packaging\windows\pinnstudio.iss   the GPU build (PyTorch's CUDA build)
 ;
 ; writes dist\PINNStudio-VERSION-setup.exe. It installs for the current user by default, with no administrator
 ; (the one installing may choose every user instead), adds a Start-menu entry, optionally a desktop shortcut,
@@ -19,7 +20,11 @@
 AppId={{{#AppGuid}}
 AppName=PINNStudio
 AppVersion={#AppVersion}
+#ifdef Gpu
+AppVerName=PINNStudio {#AppVersion} (NVIDIA GPU)
+#else
 AppVerName=PINNStudio {#AppVersion}
+#endif
 AppPublisher=PINNStudio
 AppPublisherURL=https://github.com/AsfandyarKhan72/PINNStudio
 AppSupportURL=https://github.com/AsfandyarKhan72/PINNStudio/issues
@@ -35,9 +40,19 @@ ArchitecturesInstallIn64BitMode=x64compatible
 LicenseFile=..\..\LICENSE
 SetupIconFile=..\..\pinnstudio\resources\pinnstudio.ico
 UninstallDisplayIcon={app}\PINNStudio.exe
-UninstallDisplayName=PINNStudio {#AppVersion}
 OutputDir=..\..\dist
+; the GPU build has the same AppId: it replaces the CPU build when installed over it, and the other way round
+#ifdef Gpu
+UninstallDisplayName=PINNStudio {#AppVersion} (NVIDIA GPU)
+OutputBaseFilename=PINNStudio-{#AppVersion}-gpu-setup
+; PyTorch's CUDA libraries make the setup larger than one file can hold (about 2 GB): setup.exe and .bin files,
+; kept together in one folder
+DiskSpanning=yes
+DiskSliceSize=max
+#else
+UninstallDisplayName=PINNStudio {#AppVersion}
 OutputBaseFilename=PINNStudio-{#AppVersion}-setup
+#endif
 Compression=lzma2/max
 SolidCompression=yes
 LZMAUseSeparateProcess=yes

@@ -43,7 +43,7 @@ from PyPI; a CUDA build matching the machine is chosen by the installers below.
 | `install.sh`, `install.bat` | from a checkout: create `venv/`, `pip install .`, then reinstall the PyTorch build chosen by `select_torch_index.py` and check that it landed and runs on the GPU |
 | `select_torch_index.py` | prints the PyTorch wheel tag (`cu126`, ..., or `cpu`) for this machine's GPU and driver, and with `--check TAG` tests that the installed build can compute on every GPU; the rules are in `pinnstudio/core/torch_index.py` |
 | `pinnstudio/shortcut.py` | `python -m pinnstudio --create-shortcut` / `--remove-shortcut`: desktop and menu shortcuts |
-| `packaging/windows/` | the Windows program and its installer: PyInstaller makes `dist\PINNStudio\` (`PINNStudio.exe` beside `_internal\`, with Python, Qt, PyTorch's CPU build and DeepXDE), Inno Setup makes `dist\PINNStudio-VERSION-setup.exe`. See its `README.md`, and *The Windows program* below |
+| `packaging/windows/` | the Windows program and its installer: PyInstaller makes `dist\PINNStudio\` (`PINNStudio.exe` beside `_internal\`, with Python, Qt, PyTorch's CPU build and DeepXDE), Inno Setup makes `dist\PINNStudio-VERSION-setup.exe`; with `PINNSTUDIO_GPU=1` the GPU build, with PyTorch's CUDA build, as `PINNStudio-VERSION-gpu-setup.exe` and `.bin` files. See its `README.md`, and *The Windows program* below |
 
 The installers install the latest release from PyPI by default. To install the code of a checkout, use
 `pip install -e .`, `install.sh`, or `PINNSTUDIO_SOURCE=$PWD sh get-pinnstudio.sh`.

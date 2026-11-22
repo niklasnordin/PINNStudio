@@ -48,7 +48,18 @@ env_files = [os.path.join(d, "environment.json") for d, _s, f in os.walk(run_dir
 assert env_files, "the run wrote no environment.json"
 env = json.load(open(env_files[0], encoding="utf-8"))
 assert env.get("torch") and env.get("deepxde"), env
-print(f"training run: PyTorch {env['torch']}, DeepXDE {env['deepxde']}", flush=True)
+print(f"training run: PyTorch {env['torch']}, DeepXDE {env['deepxde']}, device {env.get('device')}", flush=True)
+
+# the GPU build (PINNSTUDIO_GPU=1): PyTorch's CUDA build, and the run on the GPU when this computer has one
+if os.environ.get("PINNSTUDIO_EXPECT_CUDA") == "1":
+    import torch as _torch_gpu
+    assert _torch_gpu.version.cuda, f"the GPU build holds PyTorch's CPU build ({_torch_gpu.__version__})"
+    if _torch_gpu.cuda.is_available():
+        assert env.get("gpu") and "cuda" in str(env.get("device")), env
+        print(f"GPU check: PyTorch CUDA {_torch_gpu.version.cuda}, trained on {env['gpu']}", flush=True)
+    else:
+        print(f"GPU check: PyTorch CUDA {_torch_gpu.version.cuda}; no GPU it can use here (the NVIDIA driver must "
+              "support CUDA 13), so the run on the GPU was skipped", flush=True)
 
 # the exported script, and a designed network's script
 ast.parse(generate_clean_script(cfg))
@@ -89,6 +100,27 @@ assert w.python_code.check(), "Check did not start"
 res = w.python_code.wait_for_check(600_000)
 assert res.get("ok") and res.get("residuals") == [[64, 1]] and len(res.get("losses") or []) == 3, res
 print(f"Python code check: {len(res['conditions'])} conditions, initial losses {res['losses']}", flush=True)
+
+# how long a Check takes with a new process of the program, and with the one kept ready (core/warm.py)
+import time  # noqa: E402
+
+from pinnstudio.core import warm  # noqa: E402
+
+times = {}
+for label, keep in (("a new process", False), ("the process kept ready", True)):
+    warm.POOL.close()
+    warm.POOL.set_enabled(keep)
+    if keep:
+        warm.POOL.prestart(warm.run_env(extra=dict(PINNSTUDIO_DRY_RUN="1", CUDA_VISIBLE_DEVICES="-1",
+                                                   MPLBACKEND="Agg", DDE_BACKEND="pytorch")))
+        assert warm.POOL._spare is not None and warm.POOL._spare.ready.wait(600), "no process kept ready"
+    t0 = time.perf_counter()
+    assert w.python_code.check(), "Check did not start"
+    res = w.python_code.wait_for_check(600_000)
+    times[label] = time.perf_counter() - t0
+    assert res.get("ok"), res
+print("Check: " + ", ".join(f"{v:.1f} s with {k}" for k, v in times.items()), flush=True)
+warm.POOL.close()
 w.close()
 
 print(f"PINNStudio {pinnstudio.__version__}, Python {sys.version.split()[0]}, PyTorch {torch.__version__}: "

@@ -71,8 +71,13 @@ choose every user instead), with a Start-menu entry, optionally a desktop shortc
 with** menu of `.pinn.json` problem files, and an uninstaller under *Settings › Apps*. It needs no Python and
 no internet connection after the download.
 
-- **The CPU only.** The program holds PyTorch's CPU build (an NVIDIA build would make it several GB). To train
-  on an NVIDIA GPU, install with the [one-command installer](#one-command-installer-recommended) or pip instead.
+- **CPU or NVIDIA GPU.** `PINNStudio-VERSION-setup.exe` holds PyTorch's CPU build. To train on an NVIDIA GPU,
+  take `PINNStudio-VERSION-gpu-setup.exe` instead, with the `…-gpu-setup-1.bin` file (and any further `.bin`
+  files) in the same folder. They are about 2–3 GB, because they hold PyTorch's CUDA build. It needs an NVIDIA driver
+  that supports CUDA 13 (`nvidia-smi` shows "CUDA Version: 13.0" or newer) and a GPU from the Turing generation
+  (GeForce RTX 20, 2018) or newer. The two installers replace each other. With no usable GPU the GPU version
+  trains on the CPU. Or install with the [one-command installer](#one-command-installer-recommended), which
+  picks the PyTorch build that fits your driver.
 - **Not signed.** Windows SmartScreen warns the first time ("Windows protected your PC"): **More info**, then
   **Run anyway**. The `.sha256` file holds what the downloaded file must hash to:
   `certutil -hashfile PINNStudio-VERSION-setup.exe SHA256`.

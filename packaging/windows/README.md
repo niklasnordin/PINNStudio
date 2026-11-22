@@ -19,7 +19,9 @@ In `dist\`:
 
 - `PINNStudio\PINNStudio.exe` with `_internal\` beside it (Python, Qt, PyTorch's CPU build, DeepXDE, the
   reference data and the licences);
-- `PINNStudio-VERSION-setup.exe` and `PINNStudio-VERSION-setup.exe.sha256`, when Inno Setup 6 is installed.
+- `PINNStudio-VERSION-setup.exe` and `PINNStudio-VERSION-setup.exe.sha256`, when Inno Setup 6 is installed;
+- with `PINNSTUDIO_GPU=1`, the GPU build instead: `PINNStudio-VERSION-gpu-setup.exe` with
+  `PINNStudio-VERSION-gpu-setup-1.bin` (and more `.bin` files) beside it, each with its `.sha256`.
 
 The installer installs for the current user by default, with no administrator needed; the one installing may
 choose every user instead. It adds a Start-menu entry, optionally a desktop shortcut and PINNStudio in the
@@ -27,8 +29,13 @@ choose every user instead. It adds a Start-menu entry, optionally a desktop shor
 signed: SmartScreen warns the first time it runs ("More info", then "Run anyway"); the `.sha256` file says what
 the file must hash to.
 
-The program trains with PyTorch's CPU build. An NVIDIA build would make it several GB; GPU users install with
-the one-command installer or pip, which pick the build that fits the driver.
+The program trains with PyTorch's CPU build. The GPU build (`PINNSTUDIO_GPU=1`) holds PyTorch's CUDA build from
+`PINNSTUDIO_GPU_INDEX` (default `cu132`, the only CUDA build PyTorch 2.15 has for Windows). It needs an NVIDIA
+driver with CUDA 13 and a Turing or newer GPU, and trains on the GPU with *Train on: auto*. It builds in a venv
+of its own (`build\windows\venv-gpu`). Its setup is larger than one file can hold, so Inno Setup writes
+`.bin` files beside the setup.exe. It has the same AppId as the CPU build, so either replaces the other. Its
+build check asserts that PyTorch is the CUDA build, and trains on the GPU when the build machine has one.
+The release workflow builds both.
 
 ## How the program runs training
 
@@ -57,6 +64,13 @@ Python, `ISCC` another Inno Setup compiler. `PINNSTUDIO_INSTALL_CHECK=1` (from W
 `WSLENV=PINNSTUDIO_INSTALL_CHECK`) adds the install check: the installer runs silently into `build\windows\`, the
 installed program starts off screen for 8 seconds, and the uninstaller removes it again. It uses the program's
 own AppId, so it refuses (exit code 3) where PINNStudio is installed with this installer.
+
+```bash
+PINNSTUDIO_GPU=1 packaging/windows/build_windows_wsl.sh   # the GPU build (WSLENV is set by the script)
+```
+
+The build check also times a Python code page Check, with a new process of the program and with the one kept
+ready (*Settings › Keep Python Ready for Runs*, `PINNStudio.exe --warm`).
 
 For a release, `.github/workflows/release.yml` builds it on a Windows runner from the version tag, with the
 install check, and attaches the installer and its `.sha256` to the draft release.

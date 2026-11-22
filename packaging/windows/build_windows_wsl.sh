@@ -8,7 +8,8 @@
 #   BUILD_DIR_WIN   the Windows build folder (default D:\pinnstudio_build); a venv and pip's cache stay there
 #   REF             the commit to build (default HEAD), or worktree: the checkout's tracked files as they are
 #
-# PINNSTUDIO_INSTALL_CHECK=1 (with WSLENV=PINNSTUDIO_INSTALL_CHECK) adds the install check.
+# PINNSTUDIO_INSTALL_CHECK=1 adds the install check; PINNSTUDIO_GPU=1 makes the GPU build (PyTorch's CUDA
+# build, PINNSTUDIO_GPU_INDEX). They are passed on to Windows (WSLENV).
 set -euo pipefail
 
 BUILD_DIR_WIN="${BUILD_DIR_WIN:-D:\\pinnstudio_build}"
@@ -36,6 +37,12 @@ else
   git -C "$REPO" archive "$REF" -- "${PARTS[@]}" | tar -x -C "$BUILD_DIR_WSL"
 fi
 sed -i 's/\r*$/\r/' "$BUILD_DIR_WSL/packaging/windows/build_windows.bat"     # cmd.exe reads CRLF
+
+for v in PINNSTUDIO_INSTALL_CHECK PINNSTUDIO_GPU PINNSTUDIO_GPU_INDEX; do
+  if [[ -n "${!v:-}" && ":${WSLENV:-}:" != *":$v:"* ]]; then
+    export WSLENV="${WSLENV:+$WSLENV:}$v"
+  fi
+done
 
 cd "$BUILD_DIR_WSL"     # cmd.exe cannot start in a WSL folder
 cmd.exe /c "packaging\\windows\\build_windows.bat"
