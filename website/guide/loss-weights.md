@@ -79,7 +79,7 @@ are measured after pre-training, in both the Solve and the exported script.
 
 ### Balance the terms during training
 
-**Balance the terms during training:** changes every term's weight while Adam trains, so that no term is left
+**Balance the terms:** changes every term's weight while Adam trains, so that no term is left
 behind. The weights above stay the starting point and the balancing multiplies them. During L-BFGS the weights
 are held where Adam left them.
 
@@ -122,7 +122,7 @@ takes that output's initial-condition weight (1 for an output without an initial
 | **Raise ε step by step (0.01 → 100)** | ε schedule | on | `causal_anneal` |
 | **Fixed ε:** | ε when the schedule is off | 1.0 | `causal_eps` |
 | **Scale by initial losses: …, c =** | Automatic weights c / Lᵢ(0) | off, c = 5 | `loss_weights_from_initial` (0 = off, else c) |
-| **Balance the terms during training:** | Off, ReLoBRaLo, SoftAdapt, Gradient norms | Off | `loss_balancing` (`none`, `relobralo`, `softadapt`, `gradient`) |
+| **Balance the terms:** | Off, ReLoBRaLo, SoftAdapt, Gradient norms | Off | `loss_balancing` (`none`, `relobralo`, `softadapt`, `gradient`) |
 | **Update every (steps):** | Steps between updates (0 = the method's default) | Default | `balance_every` |
 | **Temperature:** | ReLoBRaLo and SoftAdapt temperature | 1 | `balance_temperature` |
 | **Memory α:** | How much of the previous weights is kept | 0.95 | `balance_alpha` |

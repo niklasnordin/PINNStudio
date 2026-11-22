@@ -89,7 +89,7 @@ near 300 K, makes training slow or keeps it from converging. Two settings take c
 
 The equations stay in the problem's own units. The derivatives are taken through the transforms, so nothing
 in them needs rewriting. The loss terms can still differ by orders of magnitude: then use
-**Scale by initial losses** or **Balance the terms during training** on the
+**Scale by initial losses** or **Balance the terms** on the
 [Loss weights](loss-weights.md) page. The theory, and how to write a problem in nondimensional form, is in
 [Scaling and nondimensional form](../theory/nondimensionalisation.md).
 

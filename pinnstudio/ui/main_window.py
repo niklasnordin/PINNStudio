@@ -2430,7 +2430,7 @@ class MainWindow(QMainWindow):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(4)
         row = QHBoxLayout()
-        row.addWidget(QLabel("Balance the terms during training:"))
+        row.addWidget(QLabel("Balance the terms:"))
         self.loss_balancing_combo = QComboBox()
         for label, key in (("Off", "none"), ("ReLoBRaLo (relative, random lookback)", "relobralo"),
                            ("SoftAdapt (from how fast each loss falls)", "softadapt"),
