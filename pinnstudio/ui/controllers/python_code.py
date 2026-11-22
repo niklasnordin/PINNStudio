@@ -21,6 +21,23 @@ from pinnstudio.ui.controllers.prompter import Prompter
 from pinnstudio.ui.state.python_code_state import PythonCodeState
 
 CHECK_TIMEOUT_MS = 300_000
+NO_START = "PINNSTUDIO_CHECK_NO_START "
+
+
+class _CheckRun:
+    """One running check: its process once started (in the reader thread)."""
+
+    def __init__(self):
+        self.proc = None
+        self.cancelled = False
+
+    def kill(self):
+        self.cancelled = True
+        try:
+            if self.proc is not None:
+                self.proc.kill()
+        except Exception:
+            pass
 
 
 class PythonCodeController(QObject):
@@ -286,33 +303,35 @@ class PythonCodeController(QObject):
             self._pending_edges = edges
         env = warm.run_env(extra=dict(PINNSTUDIO_DRY_RUN="1", CUDA_VISIBLE_DEVICES="-1", MPLBACKEND="Agg",
                                       DDE_BACKEND="pytorch", **extra))
-        try:
-            proc = warm.POOL.popen(path, env, cwd=self._check_dir)     # the Python kept ready, when it fits
-        except OSError:
-            self._clean_check_dir()
-            res = {"ok": False, "error": "the check could not start Python", "line": 0}
-            self.state.put_result(res)
-            self.state.put_message(_summary(res))
-            return False
-        self._proc = proc
+        run = _CheckRun()
+        self._proc = run
         self.state.put_result({})
         self.state.put_message("Checking: the Solve script runs once, without training…")
-        self._reader = threading.Thread(target=self._read, args=(proc,), name="pinnstudio-check", daemon=True)
+        self._reader = threading.Thread(target=self._read, args=(run, path, env, self._check_dir),
+                                        name="pinnstudio-check", daemon=True)
         self._reader.start()
         self._timer.start(CHECK_TIMEOUT_MS)
         return True
 
-    def _read(self, proc):
-        """(A thread) the check's whole output, handed to the window's thread when the process ends."""
+    def _read(self, run, path, env, cwd):
+        """(A thread) start the check, in the Python kept ready when it fits (which may still be loading: the
+        window does not wait for it), and hand its whole output to the window's thread when it ends."""
         try:
-            out = proc.stdout.read()
+            run.proc = warm.POOL.popen(path, env, cwd=cwd)
+        except OSError as exc:
+            self._output.emit(run, NO_START + str(exc))
+            return
+        if run.cancelled:
+            run.kill()
+        try:
+            out = run.proc.stdout.read()
         except Exception as exc:
             out = f"could not read the check's output: {exc}"
         try:
-            proc.wait(10)
+            run.proc.wait(10)
         except Exception:
             pass
-        self._output.emit(proc, out)
+        self._output.emit(run, out)
 
     def wait_for_check(self, ms: int = CHECK_TIMEOUT_MS) -> dict:
         """(Tests) wait for the running check and return its result."""
@@ -323,13 +342,14 @@ class PythonCodeController(QObject):
             QCoreApplication.processEvents()
         return self.state.result
 
-    def _check_done(self, proc, out: str):
-        if proc is not self._proc:                 # a check that timed out, or was replaced
+    def _check_done(self, run, out: str):
+        if run is not self._proc:                  # a check that timed out, or was replaced
             return
         self._proc = None
         self._timer.stop()
         self._clean_check_dir()
-        res = PC.parse_dry_run(out)
+        res = ({"ok": False, "error": "the check could not start Python", "line": 0} if out.startswith(NO_START)
+               else PC.parse_dry_run(out))
         key, pts = self._pending_edges
         if res.get("edges") is not None and key is not None:
             self.state.put_result(res, edge_key=key, edge_points=pts)
@@ -348,12 +368,9 @@ class PythonCodeController(QObject):
         return key is not None and self.state.edge_key == key and self.state.result.get("edges") is not None
 
     def _check_timed_out(self):
-        proc, self._proc = self._proc, None
-        if proc is not None:
-            try:
-                proc.kill()
-            except Exception:
-                pass
+        run, self._proc = self._proc, None
+        if run is not None:
+            run.kill()
             self._clean_check_dir()
             res = {"ok": False, "error": f"the check took longer than {CHECK_TIMEOUT_MS // 1000} s", "line": 0}
             self.state.put_result(res)
